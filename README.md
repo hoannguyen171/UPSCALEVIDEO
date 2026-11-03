@@ -26,7 +26,7 @@ Bỏ hoàn toàn phần khoá bản quyền (Google Apps Script, Machine ID, HMA
 Yêu cầu: **Python ≥ 3.9**, **ffmpeg** trong PATH (Colab/Kaggle có sẵn), `torch` (Colab/Kaggle có sẵn bản CUDA).
 
 ```bash
-git clone https://github.com/<TEN-GITHUB>/valo-upscale-gpu.git
+git clone https://github.com/hoannguyen171/UPSCALEVIDEO.git
 cd valo-upscale-gpu
 pip install -r requirements.txt          # numpy, Pillow, requests
 pip install -r requirements-ui.txt       # tuỳ chọn: Gradio UI
@@ -107,7 +107,7 @@ cd valo-upscale-gpu
 git init -b main
 git add .
 git commit -m "valo-upscale-gpu: bản Colab/Kaggle port từ app Valo Upscale"
-git remote add origin https://github.com/<TEN-GITHUB>/valo-upscale-gpu.git
+git remote add origin https://github.com/hoannguyen171/UPSCALEVIDEO.git
 git push -u origin main
 ```
 
@@ -117,14 +117,14 @@ Xác thực khi push (GitHub không nhận mật khẩu thường):
   * `Username`: tên GitHub của bạn
   * `Password`: dán **token** vừa tạo
   Lưu lại để không phải nhập lại: `git config --global credential.helper store`
-* **GitHub CLI**: `gh auth login` rồi `gh repo create valo-upscale-gpu --public --source=. --push`
+* **GitHub CLI**: `gh auth login` rồi `gh repo create UPSCALEVIDEO --public --source=. --push`
 * **GitHub Desktop**: *Add local repository* → *Publish repository*.
 
 Lưu ý cho Colab/Kaggle: **repo phải public** để clone không cần token. Nếu muốn để private,
 tạo PAT có scope `repo` và clone bằng:
 
 ```bash
-git clone https://<USER>:<TOKEN>@github.com/<USER>/valo-upscale-gpu.git
+git clone https://hoannguyen171:<TOKEN>@github.com/hoannguyen171/UPSCALEVIDEO.git
 ```
 
 ---
@@ -132,8 +132,8 @@ git clone https://<USER>:<TOKEN>@github.com/<USER>/valo-upscale-gpu.git
 ## 4. Chạy trên Google Colab (GPU)
 
 1. Mở [colab.research.google.com](https://colab.research.google.com) → *File → Open notebook → GitHub* →
-   dán `https://github.com/<TEN-GITHUB>/valo-upscale-gpu` → chọn `colab_upscale.ipynb`
-   (hoặc dùng link trực tiếp: `https://colab.research.google.com/github/<TEN-GITHUB>/valo-upscale-gpu/blob/main/colab_upscale.ipynb`).
+   dán `https://github.com/hoannguyen171/UPSCALEVIDEO` → chọn `colab_upscale.ipynb`
+   (hoặc dùng link trực tiếp: `https://colab.research.google.com/github/hoannguyen171/UPSCALEVIDEO/blob/main/colab_upscale.ipynb`).
 2. **Runtime → Change runtime type → Hardware accelerator: T4 GPU** → *Save*.
 3. Sửa ô cấu hình đầu tiên: `REPO_URL` = link repo của bạn (để trống nếu mở notebook từ GitHub).
 4. **Runtime → Run all**. Notebook tự: kiểm tra GPU → clone repo → cài deps → chạy thử file mẫu →
