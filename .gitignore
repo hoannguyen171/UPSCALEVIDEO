@@ -1,0 +1,24 @@
+# Kết quả và rác khi chạy
+outputs/
+temp/
+uploads/
+weights/
+*.part
+*.zip
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
