@@ -1,0 +1,9 @@
+# Thư viện cho luồng "link thư mục công khai" (valo_upscale/remote.py, kaggle_app.py)
+#   pip install -q -r requirements-remote.txt
+#
+# gdown                     : đọc thư mục Google Drive công khai
+# google-api-python-client  : ghi kết quả lên Drive bằng Service Account
+# google-auth               : xác thực Service Account
+gdown>=5.1
+google-api-python-client>=2.100
+google-auth>=2.23

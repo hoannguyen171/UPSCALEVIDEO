@@ -161,14 +161,16 @@ Kaggle khác Colab ở chỗ:
 
 ```
 valo_upscale/
-├── archs.py      # RRDBNet + SRVGGNetCompact (thuần torch, không cần basicsr)
-├── models.py     # registry model, tải weight, tự suy kiến trúc từ state_dict
-├── engine.py     # suy luận có tile/overlap, pipeline ảnh & video, 3-pass fallback
-├── dims.py       # clamp 4K (video) / 8K (ảnh), ép cạnh chẵn — port từ bản JS
-├── probe.py      # ffprobe: fps, duration, rotation, audio
-├── fftools.py    # định vị ffmpeg/ffprobe, chạy subprocess không qua shell
-├── cli.py        # dòng lệnh
-└── app.py        # UI Gradio
+├── archs.py       # RRDBNet + SRVGGNetCompact (thuần torch, không cần basicsr)
+├── models.py      # registry model, tải weight, tự suy kiến trúc từ state_dict
+├── engine.py      # suy luận có tile/overlap, pipeline ảnh & video, 3-pass fallback
+├── dims.py        # clamp 4K (video) / 8K (ảnh), ép cạnh chẵn — port từ bản JS
+├── probe.py       # ffprobe: fps, duration, rotation, audio
+├── fftools.py     # định vị ffmpeg/ffprobe, chạy subprocess không qua shell
+├── remote.py      # đọc thư mục công khai (Drive/GitHub/Dropbox/HTTP) + đẩy kết quả ngược lên
+├── cli.py         # dòng lệnh
+├── app.py         # UI Gradio (file trên máy)
+└── kaggle_app.py  # UI Gradio cho luồng "link thư mục công khai" + chế độ headless
 ```
 
 Điểm khác biệt kỹ thuật so với bản gốc (đã kiểm chứng khi port):
@@ -202,7 +204,65 @@ file nhị phân, `config.json` máy chủ, hay bất kỳ thành phần khoá b
 
 ---
 
-## 9. Đã kiểm chứng (chạy thật, CPU)
+## 9. Luồng "link thư mục công khai" (UI trên Kaggle/Colab)
+
+Notebook: **`folder_ui.ipynb`**
+* Kaggle: *New Notebook → File → Import Notebook → GitHub* → `hoannguyen171/UPSCALEVIDEO` → `folder_ui.ipynb`
+* Colab: https://colab.research.google.com/github/hoannguyen171/UPSCALEVIDEO/blob/main/folder_ui.ipynb
+
+Luồng: dán link thư mục → xem trước danh sách file → tải về → upscale bằng GPU → đẩy kết quả lên đích bạn chọn.
+Cài thêm thư viện cho luồng này:
+
+```bash
+pip install -q -r requirements-remote.txt   # gdown + google-api-python-client + google-auth
+```
+
+### Đọc và ghi được đến đâu (đọc kỹ mục này)
+
+| Nguồn / đích | Đọc bằng link công khai | Đẩy kết quả ngược lên |
+|---|---|---|
+| Google Drive — thư mục "Anyone with the link" | ✔ (qua `gdown`, không cần đăng nhập) | ✖ cần **Service Account JSON**: tạo SA, bật Drive API, **share thư mục cho `client_email` (quyền Editor)** |
+| Dropbox — link chia sẻ | cần **access token** (bấm *Add to your Dropbox* để thư mục nằm trong tài khoản bạn) | ✔ cùng token đó |
+| GitHub — repo/thư mục public | ✔ (không cần token) | ✔ cần PAT (`Contents: Read and write`), tối đa 100 MB/file |
+| Trang index HTTP / danh sách URL | ✔ | ✖ (không có API ghi) |
+| `/kaggle/working` (`kaggle_local`) | — | ✔ luôn dùng được — tải ở tab **Output** sau khi Save version |
+
+**Tóm lại:** link công khai chỉ để *tải về*. Muốn "upscale xong đẩy về đúng thư mục cũ" thì thư mục đó phải
+nằm trong tài khoản bạn có quyền ghi (Drive + Service Account, Dropbox + token, hoặc GitHub + PAT).
+
+### UI
+
+```bash
+python -m valo_upscale.kaggle_app            # mở UI local
+python -m valo_upscale.kaggle_app --share    # tạo link công khai (Kaggle/Colab cần Internet = On)
+```
+
+Trong UI có nút **Xem trước danh sách file** (không tải) và **Tải → Upscale → Đẩy lên** (log + tiến trình
+theo từng file). Phần *Credential* chỉ cần khi đẩy lên Drive/Dropbox/GitHub; file Service Account JSON
+có thể kéo–thả thẳng vào UI.
+
+### Chạy không giao diện (headless)
+
+```bash
+export DROPBOX_TOKEN=...      # hoặc GITHUB_TOKEN / GDRIVE_SA_JSON=/duong/dan/sa.json
+python -m valo_upscale.kaggle_app --list --url <link>
+python -m valo_upscale.kaggle_app --headless --url <link> --scale 4 --limit 5 \
+       --upload-kind dropbox --upload-folder /Upscale/ket_qua
+```
+
+### Dùng như thư viện
+
+```python
+from valo_upscale import remote
+
+items = remote.list_remote("https://drive.google.com/drive/folders/<ID>")   # tự nhận provider
+paths = remote.download_remote(items, "input")
+remote.upload_results(paths, kind="github", folder="user/repo/ket_qua", github_token="...")
+```
+
+---
+
+## 10. Đã kiểm chứng (chạy thật, CPU)
 
 | Hạng mục | Kết quả đo được |
 |---|---|
@@ -218,10 +278,22 @@ file nhị phân, `config.json` máy chủ, hay bất kỳ thành phần khoá b
 | Clamp khung hình | 1920×1080→4x = 3840×2160; 1080×1920→4x = 2160×3840; 3000×2000→8x = 8192×5460 |
 | Tên model sai | báo lỗi rõ ràng, exit code 2 (không âm thầm fallback) |
 | UI Gradio | gọi end-to-end qua HTTP (`/handler`): trả gallery ảnh + video + file tải về cho cả 2 loại media |
-| `colab_upscale.ipynb`, `kaggle_upscale.ipynb` | JSON hợp lệ, mọi code cell compile được |
+| Luồng thư mục (trang index HTTP local): tải 2 file → upscale 2x → đẩy về thư mục local | 2/2 file thành công, video giữ nguyên audio |
+| Luồng thư mục + engine AI | clip 160×90 qua `realesrgan` ra video kết quả, không fallback |
+| GitHub thật (`hoannguyen171/UPSCALEVIDEO/tree/main/samples`) | liệt kê 3 file, tải `sample_clip.mp4` (86 587 byte) từ raw.githubusercontent |
+| GitHub (API giả lập): lọc media theo thư mục con + upload | chỉ lấy `a.mp4`, `b.png`; PUT contents trả 201, đúng nội dung |
+| Dropbox (API giả lập): list + download + upload | chỉ lấy media, tải đúng bytes, upload đúng path `/Upscale/ket_qua/...` |
+| Drive (giả lập gdown + service): list/download/upload | lọc media + `file_id`, upload đúng `parents`, mimetype `video/*`, trả `webViewLink`; ID sai → báo lỗi rõ |
+| UI Gradio (gọi qua HTTP `/preview` + `/handler`) | xem trước 3 file; chạy 1 file ra kết quả, log "Hoàn tất" |
+| CLI headless (`--list`, `--headless --limit 1`) | rc = 0, file nằm trong `upscaled/` |
+| `colab_upscale.ipynb`, `kaggle_upscale.ipynb`, `folder_ui.ipynb` | JSON hợp lệ, mọi code cell compile được |
 
 Kiến trúc mạng được đối chiếu trực tiếp với mã nguồn gốc `BasicSR/basicsr/archs/rrdbnet_arch.py`
 và `Real-ESRGAN/realesrgan/archs/srvgg_arch.py`.
 
 Lưu ý: `realesrgan-ncnn-vulkan.exe` của app gốc **không chạy được** trên máy không có Vulkan
 (`vkCreateInstance failed -9`) — đúng lý do bản port này dùng PyTorch thay vì ncnn.
+
+Chưa chạy thật với endpoint Google Drive / Dropbox (máy này không có credential): các nhánh đó đã được
+kiểm tới tầng HTTP/API (server giả lập nhận đúng request) và tầng gọi thư viện (`gdown`, `MediaFileUpload`),
+nhưng lần chạy thật đầu tiên trên Kaggle vẫn nên thử với 1 file nhỏ.

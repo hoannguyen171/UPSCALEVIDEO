@@ -3,6 +3,7 @@ outputs/
 temp/
 uploads/
 weights/
+_t/
 *.part
 *.zip
 *.log
