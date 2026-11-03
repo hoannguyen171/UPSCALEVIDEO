@@ -29,6 +29,10 @@ def upscale_batch(
     tile_pad=10,
     fp32=False,
     frame_format="jpg",
+    devices="auto",
+    batch=engine.DEFAULT_BATCH,
+    encoder="auto",
+    hwaccel=True,
     progress_cb=None,
     stop_check=None,
     temp_dir=None,
@@ -76,6 +80,10 @@ def upscale_batch(
                 tile_pad=int(tile_pad),
                 fp32=bool(fp32),
                 frame_format=frame_format,
+                devices=devices or "auto",
+                batch=int(batch or engine.DEFAULT_BATCH),
+                encoder=encoder,
+                hwaccel=bool(hwaccel),
                 progress=progress_cb_inner,
                 stop_check=stop_check,
                 temp_dir=temp_dir,
@@ -101,7 +109,8 @@ def upscale_batch(
 def build_demo(out_dir="outputs", temp_dir=None, **launch_kwargs):
     import gradio as gr  # noqa: PLC0415
 
-    def handler(files, scale, model, engine_name, tile, tile_pad, fp32, frame_format, progress=gr.Progress()):
+    def handler(files, scale, model, engine_name, tile, tile_pad, fp32, frame_format, devices, batch, encoder,
+                hwaccel, progress=gr.Progress()):
         paths = [f if isinstance(f, str) else getattr(f, "name", str(f)) for f in (files or [])]
         last = None
         for state in upscale_batch(
@@ -114,6 +123,10 @@ def build_demo(out_dir="outputs", temp_dir=None, **launch_kwargs):
             tile_pad=tile_pad,
             fp32=fp32,
             frame_format=frame_format,
+            devices=devices,
+            batch=batch,
+            encoder=encoder,
+            hwaccel=hwaccel,
             progress_cb=lambda r, desc: progress(r, desc=desc),
             temp_dir=temp_dir,
         ):
@@ -142,9 +155,14 @@ def build_demo(out_dir="outputs", temp_dir=None, **launch_kwargs):
                     value="realesrgan",
                     label="Engine (realesrgan = AI GPU, ffmpeg_hq = Lanczos CPU)",
                 )
-                with gr.Accordion("Tinh chỉnh nâng cao", open=False):
+                with gr.Accordion("Tinh chỉnh tốc độ / chất lượng", open=False):
+                    devices = gr.Textbox(value="auto", label="Thiết bị (devices)",
+                                         info="auto = mọi GPU · 0 · 0,1 · cpu (batch chỉ áp dụng cho GPU)")
+                    batch = gr.Slider(1, 16, value=engine.DEFAULT_BATCH, step=1, label="Batch (patch/frame mỗi forward)")
                     tile = gr.Slider(0, 1024, value=0, step=32, label="Tile (0 = tự động, giảm khi hết VRAM)")
-                    tile_pad = gr.Slider(0, 64, value=10, step=2, label="Tile padding (chồng lấn giữa tile)")
+                    tile_pad = gr.Slider(0, 64, value=10, step=2, label="Tile padding (chồng lấn)")
+                    encoder = gr.Dropdown(["auto", "nvenc", "x264"], value="auto", label="Encoder video (auto = NVENC nếu có)")
+                    hwaccel = gr.Checkbox(True, label="Giải mã NVDEC (GPU decode)")
                     fp32 = gr.Checkbox(False, label="fp32 (tắt half precision)")
                     frame_format = gr.Dropdown(["jpg", "png"], value="jpg", label="Định dạng frame video")
                 run = gr.Button("Bắt đầu Upscale", variant="primary")
@@ -156,7 +174,8 @@ def build_demo(out_dir="outputs", temp_dir=None, **launch_kwargs):
 
         run.click(
             handler,
-            inputs=[files, scale, model, engine_name, tile, tile_pad, fp32, frame_format],
+            inputs=[files, scale, model, engine_name, tile, tile_pad, fp32, frame_format, devices, batch, encoder,
+                    hwaccel],
             outputs=[status, gallery, video, outputs],
         )
 

@@ -47,6 +47,10 @@ def run_job(
     fp32=False,
     frame_format="jpg",
     limit=0,
+    devices="auto",
+    batch=engine.DEFAULT_BATCH,
+    encoder="auto",
+    hwaccel=True,
     upload_kind="kaggle_local",
     upload_folder=None,
     dropbox_token=None,
@@ -141,6 +145,10 @@ def run_job(
                     tile_pad=int(tile_pad),
                     fp32=bool(fp32),
                     frame_format=frame_format,
+                    devices=devices,
+                    batch=int(batch or engine.DEFAULT_BATCH),
+                    encoder=encoder,
+                    hwaccel=bool(hwaccel),
                     progress=on_progress,
                     stop_check=stop_check,
                     temp_dir=temp_dir,
@@ -208,8 +216,9 @@ def build_demo(work_dir=WORK_DIR, temp_dir=None, **launch_kwargs):
         except Exception as exc:
             return f"✗ {exc}"
 
-    def handler(source, scale, model, engine_name, tile, frame_format, limit, upload_kind,
-                upload_folder, drive_sa_file, dropbox_token, github_token, drive_sa_json, progress=gr.Progress()):
+    def handler(source, scale, model, engine_name, tile, frame_format, limit, devices, batch, encoder, hwaccel,
+                upload_kind, upload_folder, drive_sa_file, dropbox_token, github_token, drive_sa_json,
+                progress=gr.Progress()):
         last = None
         for state in run_job(
             source,
@@ -219,6 +228,10 @@ def build_demo(work_dir=WORK_DIR, temp_dir=None, **launch_kwargs):
             tile=tile,
             frame_format=frame_format,
             limit=int(limit or 0),
+            devices=devices or "auto",
+            batch=int(batch or engine.DEFAULT_BATCH),
+            encoder=encoder,
+            hwaccel=bool(hwaccel),
             upload_kind=upload_kind,
             upload_folder=upload_folder or None,
             dropbox_token=dropbox_token or None,
@@ -252,8 +265,16 @@ def build_demo(work_dir=WORK_DIR, temp_dir=None, **launch_kwargs):
                 model = gr.Dropdown(list(models.MODEL_REGISTRY), value=models.DEFAULT_IMAGE_MODEL, label="Model")
                 engine_name = gr.Dropdown(["realesrgan", "ffmpeg_hq"], value="realesrgan",
                                           label="Engine (realesrgan = GPU, ffmpeg_hq = Lanczos CPU)")
-                with gr.Accordion("Tinh chỉnh", open=False):
-                    tile = gr.Slider(0, 1024, value=0, step=32, label="Tile (0 = tự động, giảm khi hết VRAM)")
+                with gr.Accordion("Tinh chỉnh tốc độ / chất lượng", open=False):
+                    devices = gr.Textbox(value="auto", label="Thiết bị (devices)",
+                                         info="auto = dùng mọi GPU (Kaggle T4 x2 → cả 2) · 0 · 0,1 · cpu")
+                    batch = gr.Slider(1, 16, value=engine.DEFAULT_BATCH, step=1,
+                                      label="Batch (patch/frame mỗi lần forward)",
+                                      info="Tăng để GPU đỡ đói; tự giảm khi hết VRAM")
+                    tile = gr.Slider(0, 1024, value=0, step=32, label="Tile (0 = tự động)")
+                    encoder = gr.Dropdown(["auto", "nvenc", "x264"], value="auto", label="Encoder video",
+                                         info="auto: NVENC nếu có, ngược lại libx264")
+                    hwaccel = gr.Checkbox(True, label="Giải mã NVDEC (GPU decode)")
                     frame_format = gr.Dropdown(["jpg", "png"], value="jpg", label="Frame video")
             with gr.Column():
                 upload_kind = gr.Dropdown(UPLOAD_KINDS, value="kaggle_local",
@@ -285,8 +306,8 @@ def build_demo(work_dir=WORK_DIR, temp_dir=None, **launch_kwargs):
         preview_btn.click(preview, [source, dropbox_token, github_token], [preview_box])
         run_btn.click(
             handler,
-            inputs=[source, scale, model, engine_name, tile, frame_format, limit, upload_kind, upload_folder,
-                    drive_sa_file, dropbox_token, github_token, drive_sa_json],
+            inputs=[source, scale, model, engine_name, tile, frame_format, limit, devices, batch, encoder, hwaccel,
+                    upload_kind, upload_folder, drive_sa_file, dropbox_token, github_token, drive_sa_json],
             outputs=[status, gallery, video, outputs],
         )
     return demo
@@ -302,6 +323,11 @@ def main(argv=None):
     parser.add_argument("-n", "--model", default=None)
     parser.add_argument("-e", "--engine", default="realesrgan", choices=["realesrgan", "ffmpeg_hq", "cpu"])
     parser.add_argument("-t", "--tile", type=int, default=0)
+    parser.add_argument("--batch", type=int, default=engine.DEFAULT_BATCH,
+                        help="Số patch/frame mỗi lần forward (tăng để GPU đỡ đói)")
+    parser.add_argument("--devices", default="auto", help="auto | 0 | 0,1 | cpu")
+    parser.add_argument("--encoder", default="auto", choices=["auto", "nvenc", "x264"])
+    parser.add_argument("--no-hwaccel", action="store_true", help="Tắt NVDEC")
     parser.add_argument("--frame-format", default="jpg", choices=["jpg", "png"])
     parser.add_argument("--limit", type=int, default=0, help="Chỉ xử lý N file đầu (0 = tất cả)")
     parser.add_argument("--upload-kind", default="kaggle_local", choices=UPLOAD_KINDS)
@@ -336,6 +362,10 @@ def main(argv=None):
             tile=args.tile,
             frame_format=args.frame_format,
             limit=args.limit,
+            devices="cpu" if args.engine == "cpu" else args.devices,
+            batch=args.batch,
+            encoder=args.encoder,
+            hwaccel=not args.no_hwaccel,
             upload_kind=args.upload_kind,
             upload_folder=args.upload_folder,
             work_dir=args.work_dir,

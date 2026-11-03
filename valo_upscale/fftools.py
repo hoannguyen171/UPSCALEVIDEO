@@ -48,6 +48,7 @@ def refresh_paths():
     global FFMPEG, FFPROBE
     FFMPEG = _resolve("ffmpeg", "VALO_FFMPEG")
     FFPROBE = _resolve("ffprobe", "VALO_FFPROBE")
+    _probe_cache.clear()
     return FFMPEG, FFPROBE
 
 
@@ -58,6 +59,7 @@ def set_paths(ffmpeg=None, ffprobe=None):
         FFMPEG = str(ffmpeg)
     if ffprobe:
         FFPROBE = str(ffprobe)
+    _probe_cache.clear()
     return FFMPEG, FFPROBE
 
 
@@ -118,6 +120,73 @@ def run(cmd, timeout=None, capture=True, on_stdout_line=None):
         errfile.seek(0)
         stderr = errfile.read()
     return proc.returncode, "".join(stdout_lines), stderr or ""
+
+
+# --------------------------------------------------------------- dò khả năng phần cứng
+
+_probe_cache: dict[str, bool] = {}
+
+
+def _probe(key, args):
+    """Chạy thử 1 lệnh ffmpeg ngắn rồi nhớ kết quả (tránh dò lại mỗi job)."""
+    if key in _probe_cache:
+        return _probe_cache[key]
+    ok = False
+    try:
+        code, _, _ = run([require_ffmpeg(), "-hide_banner", "-v", "error"] + args, timeout=60)
+        ok = code == 0
+    except Exception:
+        ok = False
+    _probe_cache[key] = ok
+    return ok
+
+
+def supports_encoder(name="h264_nvenc"):
+    """GPU có NVENC dùng được không (T4/P100 trên Kaggle: có)."""
+    return _probe(
+        f"enc:{name}",
+        ["-f", "lavfi", "-i", "color=c=black:s=64x64:r=2", "-frames:v", "2", "-c:v", name, "-f", "null", "-"],
+    )
+
+
+def supports_cuda_decode():
+    """NVDEC (giải mã bằng GPU) dùng được không.
+
+    Lưu ý: ``-hwaccel cuda`` một mình KHÔNG đủ để kết luận — khi không có GPU, ffmpeg chỉ cảnh báo
+    rồi tự giải mã bằng CPU và vẫn trả mã 0. Nên probe phải ép khung hình nằm trên GPU
+    (``-hwaccel_output_format cuda`` + ``hwdownload``) và kiểm tra có dữ liệu ghi ra hay không.
+    """
+    if "dec:cuda" in _probe_cache:
+        return _probe_cache["dec:cuda"]
+    ok = False
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = Path(tmp) / "probe.h264"
+            dump = Path(tmp) / "probe.raw"
+            code, _, _ = run(
+                [require_ffmpeg(), "-hide_banner", "-v", "error", "-f", "lavfi", "-i", "testsrc=s=64x64:r=4",
+                 "-frames:v", "4", "-c:v", "libx264", "-f", "h264", "-y", str(sample)],
+                timeout=60,
+            )
+            if code == 0:
+                code, _, _ = run(
+                    [require_ffmpeg(), "-hide_banner", "-v", "error", "-hwaccel", "cuda",
+                     "-hwaccel_output_format", "cuda", "-f", "h264", "-i", str(sample),
+                     "-vf", "hwdownload,format=nv12", "-frames:v", "2", "-f", "rawvideo", "-y", str(dump)],
+                    timeout=60,
+                )
+                ok = code == 0 and dump.exists() and dump.stat().st_size > 0
+    except Exception:
+        ok = False
+    _probe_cache["dec:cuda"] = ok
+    return ok
+
+
+def pick_video_encoder(prefer="auto"):
+    """'h264_nvenc' nếu dùng được, ngược lại 'libx264'."""
+    if prefer in ("auto", "nvenc") and supports_encoder("h264_nvenc"):
+        return "h264_nvenc"
+    return "libx264"
 
 
 refresh_paths()

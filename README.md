@@ -77,6 +77,10 @@ Bảng tham số chính:
 | `--tile-pad` | Vùng chồng lấn giữa tile (mặc định 10) |
 | `--fp32` | Tắt half precision (dùng khi fp16 gây lỗi) |
 | `--frame-format` | `jpg` (nhanh, mặc định) hoặc `png` (chất lượng cao nhất) |
+| `--devices` | `auto` (mặc định — dùng hết GPU) · `0` · `0,1` · `cpu` |
+| `--batch` | Số patch/frame mỗi lần forward (mặc định 4; chỉ áp dụng cho GPU, CPU tự về 1) |
+| `--encoder` | `auto` (NVENC nếu có) · `nvenc` · `x264` |
+| `--no-hwaccel` | Tắt giải mã NVDEC |
 | `-o, --outdir` | Thư mục kết quả (mặc định `outputs/`) |
 
 Tên file kết quả trùng quy ước app gốc: `<ten>_upscaled_<scale>x_<timestamp>.png|.mp4`.
@@ -163,10 +167,10 @@ Kaggle khác Colab ở chỗ:
 valo_upscale/
 ├── archs.py       # RRDBNet + SRVGGNetCompact (thuần torch, không cần basicsr)
 ├── models.py      # registry model, tải weight, tự suy kiến trúc từ state_dict
-├── engine.py      # suy luận có tile/overlap, pipeline ảnh & video, 3-pass fallback
+├── engine.py      # suy luận đa GPU + batch + pipeline 3 tầng, ảnh/video, NVENC/NVDEC, 3-pass fallback
 ├── dims.py        # clamp 4K (video) / 8K (ảnh), ép cạnh chẵn — port từ bản JS
 ├── probe.py       # ffprobe: fps, duration, rotation, audio
-├── fftools.py     # định vị ffmpeg/ffprobe, chạy subprocess không qua shell
+├── fftools.py     # định vị ffmpeg/ffprobe, chạy subprocess không qua shell, probe NVENC/NVDEC
 ├── remote.py      # đọc thư mục công khai (Drive/GitHub/Dropbox/HTTP) + đẩy kết quả ngược lên
 ├── cli.py         # dòng lệnh
 ├── app.py         # UI Gradio (file trên máy)
@@ -262,7 +266,55 @@ remote.upload_results(paths, kind="github", folder="user/repo/ket_qua", github_t
 
 ---
 
-## 10. Đã kiểm chứng (chạy thật, CPU)
+## 10. Tăng tốc (đa GPU, batch, NVENC/NVDEC)
+
+"GPU chỉ chạy 30%" trên Kaggle T4 x2 đến từ 3 nguyên nhân: chỉ dùng **1 trong 2 GPU**, mỗi lần forward chỉ
+**1 patch/1 frame** (GPU đói), và **CPU** (giải mã/ghi JPEG, encode H.264) chặn giữa các lần forward.
+
+| Tối ưu | Cơ chế | Cách điều khiển |
+|---|---|---|
+| **Nhiều GPU** | mỗi GPU một model riêng, chia patch (ảnh) / chia khối frame (video) | `--devices auto` (mặc định, dùng hết GPU) · `0` · `0,1` · `cpu` |
+| **Batch** | gộp nhiều patch/frame vào 1 lần forward | `--batch 4` (mặc định trên GPU; CPU tự ép về 1) |
+| **Pipeline 3 tầng** | luồng đọc frame ‖ luồng suy luận (1/GPU) ‖ luồng ghi frame | tự động |
+| **NVENC / NVDEC** | encode/giải mã video bằng phần cứng | `--encoder auto` (mặc định) · `x264` · `--no-hwaccel` |
+| **channels_last + cudnn.benchmark + truyền uint8 lên GPU** | giảm băng thông, conv nhanh hơn | tự động trên CUDA |
+| **Cache model** | nạp model 1 lần cho cả batch/queue | tự động |
+| **Tự hạ tải khi hết VRAM** | giảm batch dần rồi mới bật tile, thay vì crash | tự động |
+
+### Số đo (máy phát triển này chỉ có CPU, không có GPU NVIDIA)
+
+| Phép đo | Bản cũ | Bản này | Kết quả |
+|---|---|---|---|
+| Pipeline đọc/suy luận/ghi (compute giả lập 25 ms/frame, 40 frame 1280×720) | 2,80 s (14,3 fps) | **1,36 s (29,4 fps)** | **nhanh hơn 2,06×** |
+| Ảnh 4x tile 400, 1280×720 (4 lần chạy, lấy trung vị) | 17,0 s | 16,7 s | tương đương (CPU bão hoà sẵn, nhiễu ±25%) |
+| Video 720p 2x, 30 frame | 472,6 s | 464,7 s | tương đương — CPU mất 15,7 s/frame nên I/O không đáng kể |
+| 3 file qua `process_media` (nhờ cache model) | 3,97 s | 3,71 s | nhanh hơn 7% (weight nhỏ; RRDB x4plus lợi hơn) |
+
+**Chưa đo được trên GPU thật**: máy này không có NVIDIA, nên phần nhiều GPU / batch / NVENC / NVDEC chỉ kiểm được
+bằng worker giả (chia việc đúng, giữ nguyên thứ tự) và probe ffmpeg (trả `False` chính xác khi không có GPU).
+Ước lượng trên Kaggle **T4 x2** [INFERENCE]: dùng đủ 2 GPU (~1,8×) + GPU không còn chờ I/O (phần đo được là 2,06×)
++ batch tăng mức sử dụng SM + NVENC/NVDEC gỡ nút thắt CPU → **nhanh hơn khoảng 2–4×** so với bản trước,
+và `nvidia-smi` sẽ thấy util tăng rõ.
+
+### Cách tự kiểm tra trên Kaggle
+
+```bash
+# xem mức sử dụng GPU trong lúc chạy (terminal khác)
+watch -n 1 nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv
+```
+
+```python
+# quét batch để chọn giá trị tốt nhất cho clip của bạn (log in ra fps từng khối frame)
+for b in (1, 2, 4, 6, 8):
+    !python -m valo_upscale.cli samples/sample_clip.mp4 -s 2 --batch {b}
+```
+
+Nếu VRAM không đủ: tự động hạ batch/bật tile, hoặc đặt tay `--tile 400`. Nếu input là codec lạ làm NVDEC lỗi:
+`--no-hwaccel`. Nếu cần tương thích tối đa với player cũ: `--encoder x264`.
+
+---
+
+## 11. Đã kiểm chứng (chạy thật, CPU)
 
 | Hạng mục | Kết quả đo được |
 |---|---|
@@ -287,6 +339,15 @@ remote.upload_results(paths, kind="github", folder="user/repo/ket_qua", github_t
 | UI Gradio (gọi qua HTTP `/preview` + `/handler`) | xem trước 3 file; chạy 1 file ra kết quả, log "Hoàn tất" |
 | CLI headless (`--list`, `--headless --limit 1`) | rc = 0, file nằm trong `upscaled/` |
 | `colab_upscale.ipynb`, `kaggle_upscale.ipynb`, `folder_ui.ipynb` | JSON hợp lệ, mọi code cell compile được |
+| Engine tối ưu — suy luận thuần (cũ vs mới) | lệch tối đa 1/255, chỉ 49 trên 44 triệu pixel |
+| Engine tối ưu — `tile=0` (cũ vs mới) | lệch tối đa 2/255 (làm tròn uint8) |
+| Engine tối ưu — `batch 1` vs `batch 4` | giống hệt (0/255) |
+| Engine tối ưu — frame AI trung gian của video | lệch tối đa 2/255 (187/2,7 triệu pixel) |
+| Engine tối ưu — ảnh có tile (cũ vs mới) | PSNR 64 dB (khác cách đặt patch ở mép tile) |
+| Chia patch cho 2 GPU (worker giả) | giữ đúng thứ tự, chia 2/1 patch, đủ 3 ảnh |
+| Tự hạ tải khi "hết VRAM" (giả lập OOM) | vẫn ra kết quả 256×256 đúng, batch tự về 1 |
+| Probe NVENC/NVDEC | trả `False` đúng trên máy không có GPU (probe NVDEC phải ép `hwdownload` mới chính xác) |
+| Pipeline 3 tầng | nhanh hơn 2,06× khi compute bằng nhau (mục 10) |
 
 Kiến trúc mạng được đối chiếu trực tiếp với mã nguồn gốc `BasicSR/basicsr/archs/rrdbnet_arch.py`
 và `Real-ESRGAN/realesrgan/archs/srvgg_arch.py`.

@@ -79,7 +79,13 @@ def build_parser():
     parser.add_argument("--tile-pad", type=int, default=10, help="Vùng chồng lấn giữa các tile (mặc định 10)")
     parser.add_argument("--fp32", action="store_true", help="Tắt half precision (dùng khi fp16 gây lỗi)")
     parser.add_argument("--frame-format", default="jpg", choices=["jpg", "png"], help="Định dạng frame trung gian của video (jpg nhanh hơn)")
-    parser.add_argument("--device", default=None, choices=[None, "cuda", "cpu", "mps"], help="Thiết bị suy luận (mặc định tự chọn)")
+    parser.add_argument("--devices", default="auto",
+                        help="Thiết bị suy luận: auto (mọi GPU) | 0 | 0,1 | cpu (mặc định auto)")
+    parser.add_argument("--batch", type=int, default=engine.DEFAULT_BATCH,
+                        help=f"Số patch/frame mỗi lần forward — tăng để GPU đỡ đói (mặc định {engine.DEFAULT_BATCH}, tự hạ khi hết VRAM)")
+    parser.add_argument("--encoder", default="auto", choices=["auto", "nvenc", "x264"],
+                        help="Encoder video: auto (NVENC nếu có) | nvenc | x264 (mặc định auto)")
+    parser.add_argument("--no-hwaccel", action="store_true", help="Tắt giải mã NVDEC (mặc định tự dò)")
     parser.add_argument("--temp-dir", default=None, help="Thư mục tạm (mặc định ./temp)")
     parser.add_argument("-q", "--quiet", action="store_true", help="Chỉ in kết quả cuối")
     parser.add_argument("--list-models", action="store_true", help="Liệt kê model và trạng thái weight")
@@ -111,20 +117,31 @@ def main(argv=None):
             return 2
 
     ffmpeg_path, ffprobe_path = fftools.refresh_paths()
+    engine_name = "realesrgan" if args.engine == "cpu" else args.engine
+    devices = args.devices
+    if args.engine == "cpu":
+        devices = "cpu"
+
     if not args.quiet:
         print(f"ffmpeg : {ffmpeg_path or 'KHÔNG TÌM THẤY'}")
         print(f"ffprobe: {ffprobe_path or 'KHÔNG TÌM THẤY'}")
-        if args.engine == "realesrgan":
+        if engine_name == "realesrgan":
             import torch  # noqa: PLC0415
 
-            device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-            name = torch.cuda.get_device_name(0) if device == "cuda" else "CPU"
-            print(f"device : {device} ({name})")
+            chosen = engine.parse_devices(devices)
+            names = []
+            for device in chosen:
+                if device.startswith("cuda"):
+                    index = int(device.split(":")[1])
+                    names.append(f"{device} ({torch.cuda.get_device_name(index)})")
+                else:
+                    names.append(device)
+            print(f"device : {', '.join(names)} | batch {args.batch if chosen and chosen[0].startswith('cuda') else 1} | "
+                  f"NVENC {'có' if fftools.supports_encoder('h264_nvenc') else 'không'} | "
+                  f"NVDEC {'có' if fftools.supports_cuda_decode() else 'không'}")
         print(f"Số file: {len(inputs)} | scale {args.scale}x | engine {args.engine} | model {args.model or 'tự chọn'}\n")
 
     printer = make_progress_printer(args.quiet)
-    engine_name = "realesrgan" if args.engine == "cpu" else args.engine
-    device = args.device or ("cpu" if args.engine == "cpu" else None)
 
     ok, failed, started = [], [], time.time()
     for index, path in enumerate(inputs, start=1):
@@ -140,7 +157,10 @@ def main(argv=None):
                 tile_pad=args.tile_pad,
                 fp32=args.fp32,
                 frame_format=args.frame_format,
-                device=device,
+                devices=devices,
+                batch=args.batch,
+                encoder=args.encoder,
+                hwaccel=not args.no_hwaccel,
                 progress=printer,
                 temp_dir=args.temp_dir,
             )
