@@ -357,6 +357,8 @@ Nếu VRAM không đủ: tự động hạ batch/bật tile, hoặc đặt tay `
 | RelayVSR — suy luận thật | **chưa kiểm chứng** (máy dev không có GPU) — phải chạy trên Kaggle |
 | RelayVSR — tải weight: token, `source_dir`, symlink, bỏ qua file đã có | 15/15 PASS (`_smoke/test_hf_weights.py`): token đọc từ tham số/env, `hf_hub_download` nhận token, file vào đúng `models/diffusion_models` + `models/vae`, có sẵn thì symlink và **không gọi mạng** |
 | RelayVSR — token HF thật | `whoami` OK (user `hoanvg17195`), repo public truy cập được |
+| RelayVSR — tải cả x2 và x4 | 25/25 PASS (`_smoke/test_hf_weights.py`): `normalize_scales` nhận `2` / `4` / `"2,4"` / list (bỏ trùng, giữ thứ tự), hệ số sai bị chặn; tải cả 2 cặp = **4 file đúng tên**, mỗi lần gọi đều mang token |
+| RelayVSR — tên file trên Hub | 4/4 file (x2 + x4, model + VAE) tồn tại thật trên `Comfy-Org/RelayVSR` (kiểm qua HfApi) |
 
 Kiến trúc mạng được đối chiếu trực tiếp với mã nguồn gốc `BasicSR/basicsr/archs/rrdbnet_arch.py`
 và `Real-ESRGAN/realesrgan/archs/srvgg_arch.py`.
@@ -392,11 +394,13 @@ Hệ số phóng đại **do checkpoint quyết định** (2× hoặc 4×), khô
 
 ```bash
 export HF_TOKEN=hf_xxx          # hoặc
-python -m valo_upscale.comfy_upscale --download --comfy-dir ComfyUI --scale 2 --token hf_xxx
+python -m valo_upscale.comfy_upscale --download --comfy-dir ComfyUI --scales 2 --token hf_xxx
+python -m valo_upscale.comfy_upscale --download --comfy-dir ComfyUI --scales "2,4"      # tải cả hai cặp
 ```
 
 ```python
-cu.download_models("/kaggle/working/ComfyUI", 2, token="hf_xxx")   # token chỉ để tăng hạn mức
+cu.download_models("/kaggle/working/ComfyUI", 2, token="hf_xxx")        # chỉ x2
+cu.download_models("/kaggle/working/ComfyUI", "2,4", token="hf_xxx")    # cả x2 và x4 (~10,6 GB)
 ```
 
 * Đã có weight ở đâu đó (thường là `/kaggle/input` của một Kaggle Dataset) thì truyền `source_dir`:
@@ -426,7 +430,8 @@ Nên lưu token trong **Kaggle Secrets** (Add-ons → Secrets, tên `HF_TOKEN`) 
 
 ### Chạy
 
-Notebook: **`relayvsr_kaggle.ipynb`** — clone ComfyUI → tải weight → chạy server headless → upscale →
+Notebook: **`relayvsr_kaggle.ipynb`** — ô 3 có `DOWNLOAD_SCALES` (`"2"`, `"4"` hoặc `"2,4"`) và `SCALE`
+(hệ số dùng khi chạy, phải nằm trong danh sách đã tải) → clone ComfyUI → tải weight → chạy server headless → upscale →
 hiển thị kết quả (nhận cả đường dẫn local, `/kaggle/input`, hoặc **link thư mục công khai** qua `remote.py`).
 
 Bằng CLI:

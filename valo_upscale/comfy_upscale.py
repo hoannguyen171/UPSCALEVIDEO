@@ -59,9 +59,30 @@ class ComfyError(RuntimeError):
 
 def model_files(scale):
     """Tên file model + VAE cho hệ số 2x/4x (đúng như Comfy-Org đặt tên)."""
-    if scale not in MODEL_PAIRS:
-        raise ComfyError(f"RelayVSR chỉ có hệ số 2 hoặc 4, không có {scale}x.")
-    return MODEL_PAIRS[scale]
+    try:
+        key = int(scale)
+    except (TypeError, ValueError):
+        raise ComfyError(f"Hệ số không hợp lệ: {scale!r} (chỉ có 2 hoặc 4).") from None
+    if key not in MODEL_PAIRS:
+        raise ComfyError(f"RelayVSR chỉ có hệ số 2 hoặc 4, không có {key}x.")
+    return MODEL_PAIRS[key]
+
+
+def normalize_scales(spec):
+    """'2' | 4 | '2,4' | [2, 4] → danh sách hệ số cần tải (đã kiểm tra hợp lệ)."""
+    if isinstance(spec, (list, tuple, set)):
+        items = [str(s) for s in spec]
+    else:
+        items = [piece.strip() for piece in str(spec).split(",") if piece.strip()]
+    scales = []
+    for item in items:
+        model_files(item)  # validate
+        value = int(item)
+        if value not in scales:
+            scales.append(value)
+    if not scales:
+        raise ComfyError("Chưa chọn hệ số nào để tải (2, 4 hoặc '2,4').")
+    return scales
 
 
 # ------------------------------------------------------------------ HTTP nhỏ gọn
@@ -454,23 +475,28 @@ def link_or_copy(src, dst):
 def download_models(comfy_dir, scale=2, repo=HF_REPO, token=None, source_dir=None, log=None):
     """Đưa model + VAE vào đúng thư mục ComfyUI.
 
+    * ``scale``: ``2``, ``4`` hoặc ``"2,4"`` (tải cả hai cặp — mỗi cặp ~5,3 GB).
     * ``token``: Hugging Face token (mặc định lấy từ biến môi trường ``HF_TOKEN``); repo này
       công khai nên token chỉ để tăng hạn mức và tốc độ tải.
     * ``source_dir``: nếu đã có weight ở đâu đó (thường là ``/kaggle/input`` của một Kaggle
-      Dataset) thì symlink/copy từ đó, **không tải lại 5,3 GB** mỗi phiên.
+      Dataset) thì symlink/copy từ đó, **không tải lại** mỗi phiên.
     """
     try:
         from huggingface_hub import hf_hub_download  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover
         raise ComfyError("Thiếu huggingface_hub. Cài: pip install -q huggingface_hub") from exc
 
-    model_file, vae_file = model_files(scale)
+    scales = normalize_scales(scale)
     token = _hf_token(token)
     models_dir = Path(comfy_dir) / "models"
-    plan = [
-        (f"diffusion_models/{model_file}", models_dir / "diffusion_models" / model_file),
-        (f"vae/{vae_file}", models_dir / "vae" / vae_file),
-    ]
+
+    plan = []
+    for item in scales:
+        model_file, vae_file = model_files(item)
+        plan += [
+            (f"diffusion_models/{model_file}", models_dir / "diffusion_models" / model_file),
+            (f"vae/{vae_file}", models_dir / "vae" / vae_file),
+        ]
 
     paths = []
     for remote, target in plan:
@@ -504,7 +530,9 @@ def main(argv=None):
                                      description="Upscale video bằng RelayVSR trong ComfyUI (headless)")
     parser.add_argument("--input", help="Video đầu vào")
     parser.add_argument("--out", help="File kết quả")
-    parser.add_argument("--scale", type=int, default=2, choices=[2, 4])
+    parser.add_argument("--scale", type=int, default=2, choices=[2, 4], help="Hệ số dùng khi chạy")
+    parser.add_argument("--scales", default=None,
+                        help="Hệ số cần TẢI khi --download: \"2\", \"4\" hoặc \"2,4\" (mặc định = --scale)")
     parser.add_argument("--comfy-dir", help="Thư mục ComfyUI (có main.py)")
     parser.add_argument("--server", default=DEFAULT_SERVER)
     parser.add_argument("--steps", type=int, default=1)
@@ -527,7 +555,7 @@ def main(argv=None):
         if not args.comfy_dir:
             print("Cần --comfy-dir", file=sys.stderr)
             return 2
-        for path in download_models(args.comfy_dir, args.scale, token=args.token,
+        for path in download_models(args.comfy_dir, args.scales or args.scale, token=args.token,
                                    source_dir=args.weights_source, log=log):
             print("đã có:", path)
         return 0
