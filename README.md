@@ -355,6 +355,8 @@ Nếu VRAM không đủ: tự động hạ batch/bật tile, hoặc đặt tay `
 | RelayVSR — client + node video core (graph stub, trên server thật) | `LoadVideo→GetVideoComponents→CreateVideo→SaveVideo` ra mp4 240×136/10 fps, **giữ audio**, client copy được file ra ngoài |
 | RelayVSR — `upscale_video()` end-to-end (graph stub) | trả file kết quả, giữ kích thước + audio, dọn file tạm trong `input/`, báo đúng `expected_size` (2x) |
 | RelayVSR — suy luận thật | **chưa kiểm chứng** (máy dev không có GPU) — phải chạy trên Kaggle |
+| RelayVSR — tải weight: token, `source_dir`, symlink, bỏ qua file đã có | 15/15 PASS (`_smoke/test_hf_weights.py`): token đọc từ tham số/env, `hf_hub_download` nhận token, file vào đúng `models/diffusion_models` + `models/vae`, có sẵn thì symlink và **không gọi mạng** |
+| RelayVSR — token HF thật | `whoami` OK (user `hoanvg17195`), repo public truy cập được |
 
 Kiến trúc mạng được đối chiếu trực tiếp với mã nguồn gốc `BasicSR/basicsr/archs/rrdbnet_arch.py`
 và `Real-ESRGAN/realesrgan/archs/srvgg_arch.py`.
@@ -383,6 +385,30 @@ Hệ số phóng đại **do checkpoint quyết định** (2× hoặc 4×), khô
 | Điểm mạnh | nhanh, upscale hàng loạt | thêm chi tiết "sinh" mới, **giảm nhấp nháy theo thời gian** |
 | Tốc độ tham chiếu | T4: vài fps/frame | H100: 45,4 fps cho 1024×768→2048×1536 (x2); 12,6 fps cho 4× output |
 | Khi nào dùng | mọi lúc, nhất là batch lớn | clip AI bị flicker, cần bản nét hơn hẳn |
+
+### Token Hugging Face (tuỳ chọn) & không tải lại 5,3 GB
+
+* Repo `Comfy-Org/RelayVSR` **công khai** — không cần token; nhưng token giúp **hạn mức/tốc độ tải** cao hơn:
+
+```bash
+export HF_TOKEN=hf_xxx          # hoặc
+python -m valo_upscale.comfy_upscale --download --comfy-dir ComfyUI --scale 2 --token hf_xxx
+```
+
+```python
+cu.download_models("/kaggle/working/ComfyUI", 2, token="hf_xxx")   # token chỉ để tăng hạn mức
+```
+
+* Đã có weight ở đâu đó (thường là `/kaggle/input` của một Kaggle Dataset) thì truyền `source_dir`:
+  hàm sẽ **symlink** (không tốn thêm 5,3 GB đĩa) hoặc copy nếu không symlink được:
+
+```python
+cu.download_models("/kaggle/working/ComfyUI", 2, source_dir="/kaggle/input")
+```
+
+Quy trình tiết kiệm nhất trên Kaggle: phiên đầu tải 1 lần → **Save version** → tab **Output** →
+*New Dataset* từ `ComfyUI/models`; các phiên sau *Add Input* dataset đó và để `WEIGHTS_SOURCE="/kaggle/input"`.
+Nên lưu token trong **Kaggle Secrets** (Add-ons → Secrets, tên `HF_TOKEN`) thay vì gõ vào notebook.
 
 ### Yêu cầu
 

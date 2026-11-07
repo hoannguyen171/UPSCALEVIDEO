@@ -20,6 +20,7 @@ Audio của video gốc được truyền thẳng vào ``CreateVideo`` nên gi�
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -421,25 +422,78 @@ def stop_server(proc):
             proc.kill()
 
 
-def download_models(comfy_dir, scale=2, repo=HF_REPO, log=None):
-    """Tải model + VAE từ Hugging Face vào đúng thư mục ComfyUI."""
+def _hf_token(token=None):
+    """Token lấy theo thứ tự: tham số → HF_TOKEN → HUGGING_FACE_HUB_TOKEN."""
+    return token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+
+def find_local_weight(source_dir, filename):
+    """Tìm file weight đã có sẵn (ví dụ trong /kaggle/input của một Kaggle Dataset)."""
+    if not source_dir:
+        return None
+    root = Path(source_dir)
+    if not root.exists():
+        return None
+    for path in root.rglob(filename):
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def link_or_copy(src, dst):
+    """Symlink nếu được (không tốn thêm đĩa), không thì copy."""
+    dst = Path(dst)
+    try:
+        dst.symlink_to(Path(src))
+        return "symlink"
+    except OSError:
+        shutil.copy2(src, dst)
+        return "copy"
+
+
+def download_models(comfy_dir, scale=2, repo=HF_REPO, token=None, source_dir=None, log=None):
+    """Đưa model + VAE vào đúng thư mục ComfyUI.
+
+    * ``token``: Hugging Face token (mặc định lấy từ biến môi trường ``HF_TOKEN``); repo này
+      công khai nên token chỉ để tăng hạn mức và tốc độ tải.
+    * ``source_dir``: nếu đã có weight ở đâu đó (thường là ``/kaggle/input`` của một Kaggle
+      Dataset) thì symlink/copy từ đó, **không tải lại 5,3 GB** mỗi phiên.
+    """
     try:
         from huggingface_hub import hf_hub_download  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover
         raise ComfyError("Thiếu huggingface_hub. Cài: pip install -q huggingface_hub") from exc
 
     model_file, vae_file = model_files(scale)
+    token = _hf_token(token)
     models_dir = Path(comfy_dir) / "models"
     plan = [
-        (f"diffusion_models/{model_file}", models_dir / "diffusion_models"),
-        (f"vae/{vae_file}", models_dir / "vae"),
+        (f"diffusion_models/{model_file}", models_dir / "diffusion_models" / model_file),
+        (f"vae/{vae_file}", models_dir / "vae" / vae_file),
     ]
+
     paths = []
-    for remote, local_dir in plan:
-        local_dir.mkdir(parents=True, exist_ok=True)
+    for remote, target in plan:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and target.stat().st_size > 0:
+            if log:
+                log(f"đã có sẵn: {target}")
+            paths.append(str(target))
+            continue
+
+        local = find_local_weight(source_dir, Path(remote).name)
+        if local is not None:
+            how = link_or_copy(local, target)
+            if log:
+                log(f"{how} từ {local} → {target}")
+            paths.append(str(target))
+            continue
+
         if log:
-            log(f"Đang tải {remote} ...")
-        paths.append(hf_hub_download(repo_id=repo, filename=remote, local_dir=str(local_dir)))
+            log(f"Đang tải {remote} {'(đã xác thực HF_TOKEN)' if token else '(không xác thực)'} ...")
+        paths.append(
+            hf_hub_download(repo_id=repo, filename=remote, local_dir=str(models_dir), token=token)
+        )
     return paths
 
 
@@ -462,6 +516,9 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=7200)
     parser.add_argument("--check", action="store_true", help="Chỉ kiểm tra node/weight rồi thoát")
     parser.add_argument("--download", action="store_true", help="Tải weight về ComfyUI rồi thoát")
+    parser.add_argument("--token", default=None, help="Hugging Face token (mặc định lấy từ HF_TOKEN)")
+    parser.add_argument("--weights-source", default=None,
+                        help="Thư mục đã có weight (vd /kaggle/input) — symlink thay vì tải lại")
     args = parser.parse_args(argv)
 
     log = lambda text: print(text, flush=True)  # noqa: E731
@@ -470,7 +527,8 @@ def main(argv=None):
         if not args.comfy_dir:
             print("Cần --comfy-dir", file=sys.stderr)
             return 2
-        for path in download_models(args.comfy_dir, args.scale, log=log):
+        for path in download_models(args.comfy_dir, args.scale, token=args.token,
+                                   source_dir=args.weights_source, log=log):
             print("đã có:", path)
         return 0
 
