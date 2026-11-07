@@ -173,6 +173,7 @@ valo_upscale/
 ├── probe.py       # ffprobe: fps, duration, rotation, audio
 ├── fftools.py     # định vị ffmpeg/ffprobe, chạy subprocess không qua shell, probe NVENC/NVDEC
 ├── remote.py      # đọc thư mục công khai (Drive/GitHub/Dropbox/HTTP) + đẩy kết quả ngược lên
+├── lightx2v_upscale.py  # đường LightX2V: 2 GPU cho 1 clip (Ulysses SP), tải weight, hậu kiểm + ghép audio
 ├── cli.py         # dòng lệnh
 ├── app.py         # UI Gradio (file trên máy)
 ├── kaggle_app.py  # UI Gradio cho luồng "link thư mục công khai" + chế độ headless
@@ -355,6 +356,11 @@ Nếu VRAM không đủ: tự động hạ batch/bật tile, hoặc đặt tay `
 | RelayVSR — client + node video core (graph stub, trên server thật) | `LoadVideo→GetVideoComponents→CreateVideo→SaveVideo` ra mp4 240×136/10 fps, **giữ audio**, client copy được file ra ngoài |
 | RelayVSR — `upscale_video()` end-to-end (graph stub) | trả file kết quả, giữ kích thước + audio, dọn file tạm trong `input/`, báo đúng `expected_size` (2x) |
 | RelayVSR — suy luận thật | **chưa kiểm chứng** (máy dev không có GPU) — phải chạy trên Kaggle |
+| LightX2V — config & lệnh chạy | 6/6 config chính thức có thật (x2/x4 × `single`/`sp`/`block_offload`), `sp` đúng `{"seq_p_size": 2, "seq_p_attn_type": "ulysses"}`; lệnh dựng khớp `scripts/dist_infer/*.sh` (`torch.distributed.run --nproc_per_node=N -m lightx2v.infer …`) |
+| LightX2V — weight | đúng repo + đúng tên file cho cả x2 (`lightx2v/RelayVSR_X2`) và x4 (`kopper/RelayVSR`), mọi lần gọi đều có token, dùng lại bản sẵn có (symlink, không gọi mạng), file <1 MB bị coi là chưa sẵn sàng; **4/4 file tồn tại thật trên Hub** (HfApi) |
+| LightX2V — đường ống end-to-end | chạy bằng repo LightX2V **giả**: subprocess thật → mp4 đúng 2×, **ghép lại audio** từ video gốc, xoá file trung gian, giữ log; `size_ok`/`audio_ok`/`frames_ok` đều True; `dry-run` không thực thi gì |
+| LightX2V — hậu kiểm & audio | `expected_size` làm tròn chẵn đúng (1280×720 → 2560×1440; 101×51 → 202×102); `ensure_audio` thật bằng ffmpeg (ghép/ bỏ qua khi đã có tiếng/ khi nguồn không có tiếng) |
+| LightX2V — suy luận thật | **chưa kiểm chứng** (máy dev không có GPU) — phải chạy trên Kaggle |
 | RelayVSR — tải weight: token, `source_dir`, symlink, bỏ qua file đã có | 15/15 PASS (`_smoke/test_hf_weights.py`): token đọc từ tham số/env, `hf_hub_download` nhận token, file vào đúng `models/diffusion_models` + `models/vae`, có sẵn thì symlink và **không gọi mạng** |
 | RelayVSR — token HF thật | `whoami` OK (user `hoanvg17195`), repo public truy cập được |
 | RelayVSR — 2 GPU cho nhiều clip | 2 instance ComfyUI: port riêng, `input/output/temp/user` riêng, **chung `models`**, `check_ready` OK trên cả hai, 4 clip chạy **chồng thời gian** (chứng minh song song), kết quả đúng thứ tự + giữ audio, dọn sạch file tạm |
@@ -536,9 +542,44 @@ torchrun --nproc_per_node=2 -m lightx2v.infer \
 Rủi ro cần biết trước: LightX2V là framework production — `requirements.txt` gồm `sgl-kernel`, `qtorch`,
 `torchao`, `torchaudio`, `decord`, `redis`, `pymongo`, `aioboto3`, `swanlab`, `modelscope`…; tài liệu khuyến
 nghị Docker `lightx2v/lightx2v:26062001-cu130` (Kaggle không chạy Docker được). Config `_sp` bật
-`use_compile: true` + `attention_backend: triton` nên lần chạy đầu phải biên dịch, và không có gì bảo đảm
-`sgl-kernel` khớp torch/CUDA của Kaggle. Vì vậy repo này chỉ đóng gói đường ComfyUI (đã kiểm chứng tới tầng
-chạy thật), còn đường LightX2V để bạn chạy theo lệnh trên.
+`use_compile: true` + `attention_backend: triton` nên lần chạy đầu phải biên dịch.
+
+**Đã đóng gói** đường này: module `valo_upscale/lightx2v_upscale.py` + notebook `relayvsr_lightx2v_kaggle.ipynb`.
+
+```bash
+python -m valo_upscale.lightx2v_upscale --check    --repo-dir LightX2V --scale 2
+python -m valo_upscale.lightx2v_upscale --download --repo-dir LightX2V --scale 2 --weights-source /kaggle/input
+python -m valo_upscale.lightx2v_upscale --dry-run  --input clip.mp4 --out out.mp4 --repo-dir LightX2V --mode sp --nproc 2
+python -m valo_upscale.lightx2v_upscale --input clip.mp4 --out out.mp4 --repo-dir LightX2V --mode sp --nproc 2
+```
+
+```python
+from valo_upscale import lightx2v_upscale as lx
+
+lx.clone_repo("LightX2V", log=print)
+for cmd in lx.install_commands("LightX2V"):        # pip install -e . (bỏ qua torch để giữ bản CUDA của Kaggle)
+    subprocess.run(cmd, check=False)
+lx.download_weights(2, "LightX2V/models/RelayVSR_X2", source_dir="/kaggle/input")
+
+rep = lx.run_upscale("clip.mp4", "out.mp4", repo_dir="LightX2V", scale=2, mode="sp", nproc=2,
+                     dtype="FP16", progress=print)
+print(rep["size_ok"], rep["audio_ok"], rep["frames_ok"], rep["info"])
+```
+
+| `mode` | Config LightX2V | Dùng khi |
+|---|---|---|
+| `sp` | `relayvsr_x2_sp.json` | **2 GPU cho 1 clip** (Ulysses, `seq_p_size=2`) |
+| `single` | `relayvsr_x2.json` | 1 GPU |
+| `block_offload` | `relayvsr_x2_block_offload.json` | 1 GPU ít VRAM (`cpu_offload` theo block) |
+
+Weight: x2 → repo `lightx2v/RelayVSR_X2` (`wan_x2.safetensors` 9,66 GB + `flash_x2.safetensors` 122 MB);
+x4 → repo `kopper/RelayVSR` (`wan.safetensors` + `flash.safetensors`). Runner SR của LightX2V **không** giữ
+audio → module tự ghép lại từ video gốc (`ensure_audio`) rồi hậu kiểm kích thước/fps/số frame
+(`verify_output`, có xét việc làm tròn xuống bội số 2 của YUV420).
+
+Mặc định `dtype="FP16"` vì **T4 (Turing) không có BF16 native**, còn `scripts/base/base.sh` của LightX2V để
+`DTYPE=BF16`. Cần đổi thêm thì dùng `overrides=`: `{"use_compile": False}` khi torch.compile lỗi,
+`{"video_codec": "libx264"}` nếu muốn player/browser đọc được ngay (config gốc là `libx265`).
 
 ### Trục trặc thường gặp
 
