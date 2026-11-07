@@ -357,6 +357,8 @@ Nếu VRAM không đủ: tự động hạ batch/bật tile, hoặc đặt tay `
 | RelayVSR — suy luận thật | **chưa kiểm chứng** (máy dev không có GPU) — phải chạy trên Kaggle |
 | RelayVSR — tải weight: token, `source_dir`, symlink, bỏ qua file đã có | 15/15 PASS (`_smoke/test_hf_weights.py`): token đọc từ tham số/env, `hf_hub_download` nhận token, file vào đúng `models/diffusion_models` + `models/vae`, có sẵn thì symlink và **không gọi mạng** |
 | RelayVSR — token HF thật | `whoami` OK (user `hoanvg17195`), repo public truy cập được |
+| RelayVSR — 2 GPU cho nhiều clip | 2 instance ComfyUI: port riêng, `input/output/temp/user` riêng, **chung `models`**, `check_ready` OK trên cả hai, 4 clip chạy **chồng thời gian** (chứng minh song song), kết quả đúng thứ tự + giữ audio, dọn sạch file tạm |
+| RelayVSR — chống treo khi ComfyUI chết lúc khởi động | `wait_ready(..., proc=, log_path=)` phát hiện tiến trình thoát và in log cuối (thay vì chờ hết 900s) |
 | RelayVSR — tải cả x2 và x4 | 25/25 PASS (`_smoke/test_hf_weights.py`): `normalize_scales` nhận `2` / `4` / `"2,4"` / list (bỏ trùng, giữ thứ tự), hệ số sai bị chặn; tải cả 2 cặp = **4 file đúng tên**, mỗi lần gọi đều mang token |
 | RelayVSR — tên file trên Hub | 4/4 file (x2 + x4, model + VAE) tồn tại thật trên `Comfy-Org/RelayVSR` (kiểm qua HfApi) |
 
@@ -479,6 +481,65 @@ LoadVideo → GetVideoComponents ─┬→ RelayVSRConditioning → KSampler(1 s
   chứa một mục `type="input"` (file gốc do `LoadVideo` trả về) nên phải lọc khi lấy kết quả; và trên Windows
   file tạm trong `input/` có thể còn bị giữ handle → phải thử xoá lại vài lần.
 
+### Dùng cả 2 GPU (Kaggle T4 x2)
+
+Hai việc khác nhau, đừng lẫn:
+
+**A. Nhiều clip → tăng thông lượng (đã code + đã test, không cần cài thêm)**
+
+Mỗi GPU một instance ComfyUI: **dùng chung thư mục `models`** nhưng tách `input`/`output`/`temp`/`user` riêng
+(`--base-directory` + `--input-directory` + `--output-directory` + `--temp-directory` + `--user-directory`),
+rồi chia clip theo vòng:
+
+```python
+from valo_upscale import comfy_upscale as cu
+
+instances = cu.start_instances("/kaggle/working/ComfyUI", ports=[8188, 8189], gpus=[0, 1],
+                               root="/kaggle/working/comfy_instances")   # nhớ stop_instances() khi xong
+
+outcome = cu.run_clips_parallel(                                          # tự bật, chia clip, tự dọn
+    clips, "out", comfy_dir="/kaggle/working/ComfyUI", gpus=[0, 1], scale=2,
+    root="/kaggle/working/comfy_instances", on_log=print,
+)
+print(outcome["wall"], outcome["errors"])
+```
+
+Notebook: ô **6b**. Đây là tăng **thông lượng** khi có nhiều clip (~2× với 2 GPU); **không** làm một clip
+chạy nhanh hơn. Muốn một clip nhanh hơn thì phải chia chính nó ra — xem B.
+
+**B. Một clip, dùng cả 2 GPU → LightX2V + Ulysses sequence parallel (chưa đóng gói vào repo)**
+
+`configs/relayvsr/relayvsr_x2_sp.json` chỉ khác config thường ở chỗ thêm:
+
+```json
+"parallel": { "seq_p_size": 2, "seq_p_attn_type": "ulysses" }
+```
+
+→ chuỗi token của DiT được **chia đôi cho 2 GPU**; ở attention, các rank đổi vai trò head↔sequence bằng
+`all2all` rồi `all_gather` (`lightx2v/models/networks/relayvsr/parallel.py`). Khởi động bằng **`torchrun`**,
+số process = `seq_p_size × cfg_p_size` (docs `method_tutorials/parallel.md`):
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1
+export DTYPE=FP16        # T4 (Turing) không có BF16 native, mặc định của LightX2V là BF16
+torchrun --nproc_per_node=2 -m lightx2v.infer \
+  --model_cls relayvsr_x2 --task sr \
+  --model_path ./models/RelayVSR_X2 \
+  --config_json ./configs/relayvsr/relayvsr_x2_sp.json \
+  --video_path input.mp4 --sr_ratio 2 --save_result_path save_results/out.mp4 --seed 42
+```
+
+Đường này dùng bản **fp16** của LightX2V (`wan_x2.safetensors` 9,66 GB + `flash_x2.safetensors` 122 MB, repo
+`lightx2v/RelayVSR_X2`), **không** dùng file int8 của Comfy-Org. Bản 4x có `relayvsr_x4_sp.json` với
+`wan.safetensors`/`flash.safetensors`.
+
+Rủi ro cần biết trước: LightX2V là framework production — `requirements.txt` gồm `sgl-kernel`, `qtorch`,
+`torchao`, `torchaudio`, `decord`, `redis`, `pymongo`, `aioboto3`, `swanlab`, `modelscope`…; tài liệu khuyến
+nghị Docker `lightx2v/lightx2v:26062001-cu130` (Kaggle không chạy Docker được). Config `_sp` bật
+`use_compile: true` + `attention_backend: triton` nên lần chạy đầu phải biên dịch, và không có gì bảo đảm
+`sgl-kernel` khớp torch/CUDA của Kaggle. Vì vậy repo này chỉ đóng gói đường ComfyUI (đã kiểm chứng tới tầng
+chạy thật), còn đường LightX2V để bạn chạy theo lệnh trên.
+
 ### Trục trặc thường gặp
 
 | Hiện tượng | Xử lý |
@@ -486,7 +547,9 @@ LoadVideo → GetVideoComponents ─┬→ RelayVSRConditioning → KSampler(1 s
 | `check_ready` báo thiếu node | Cập nhật ComfyUI lên master (ô 2 của notebook) |
 | OOM trên T4 | `extra_args=("--lowvram",)`, hoặc chia clip thành đoạn ngắn |
 | Lỗi khi nạp model int8 trên Turing | Đổi sang weight fp của `kopper/RelayVSR` (`wan.safetensors` 9,6 GB + `flash.safetensors` 122 MB) và trỏ `model_file`/`vae_file` sang tên file đó |
-| Muốn dùng cả 2 GPU | Đường LightX2V có `relayvsr_x2_sp.json` (sequence parallel 2 GPU) và `relayvsr_x2_block_offload.json`; đổi lại là cài LightX2V (nặng hơn ComfyUI) |
+| Dùng cả 2 GPU cho **nhiều clip** | Mục "Dùng cả 2 GPU" bên dưới — 2 instance ComfyUI chia clip, không cần cài thêm |
+| Dùng cả 2 GPU cho **một clip** | LightX2V + `relayvsr_x2_sp.json` (Ulysses sequence parallel) — xem cùng mục |
+| Thiếu VRAM trên 1 GPU | `relayvsr_x2_block_offload.json` (`cpu_offload` theo block) hoặc `LOW_VRAM` trong notebook |
 | Muốn UI trực quan thay vì headless | Custom node cộng đồng `bbaudio-2025/Comfyui-Relay-VSR` (có node "Upscale Streaming" pixel-in/pixel-out) |
 
 Link tham khảo: [model card gốc](https://huggingface.co/kopper/RelayVSR) ·

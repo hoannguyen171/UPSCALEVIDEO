@@ -28,6 +28,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import probe
@@ -104,11 +106,29 @@ def _request(base, path, payload=None, timeout=60):
     return json.loads(body) if body.strip().startswith(("{", "[")) else body
 
 
-def wait_ready(base=DEFAULT_SERVER, timeout=300, interval=2.0, log=None):
-    """Đợi ComfyUI khởi động xong (server trả /object_info)."""
+def log_tail(log_path, lines=12):
+    """Đọc mấy dòng cuối log của ComfyUI để báo lỗi cho dễ hiểu."""
+    if not log_path:
+        return ""
+    try:
+        text = Path(log_path).read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    except OSError:
+        return ""
+    return "\n--- log ComfyUI (cuối) ---\n" + "\n".join(text[-lines:])
+
+
+def wait_ready(base=DEFAULT_SERVER, timeout=300, interval=2.0, log=None, proc=None, log_path=None):
+    """Đợi ComfyUI khởi động xong (server trả /object_info).
+
+    Nếu tiến trình ComfyUI đã thoát (sai cờ, thiếu CUDA, log lỗi...) thì báo ngay kèm log,
+    thay vì treo hết thời gian chờ.
+    """
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            raise ComfyError(f"ComfyUI thoát ngay khi khởi động (mã {proc.returncode})."
+                             + log_tail(log_path))
         try:
             _request(base, "/object_info", timeout=20)
             return True
@@ -117,7 +137,7 @@ def wait_ready(base=DEFAULT_SERVER, timeout=300, interval=2.0, log=None):
             if log:
                 log("Đang đợi ComfyUI...")
             time.sleep(interval)
-    raise ComfyError(f"ComfyUI không sẵn sàng sau {timeout}s ({last})")
+    raise ComfyError(f"ComfyUI không sẵn sàng sau {timeout}s ({last})" + log_tail(log_path))
 
 
 def object_info(base=DEFAULT_SERVER):
@@ -290,18 +310,20 @@ def collect_outputs(entry, include_inputs=False):
     return outputs
 
 
-def resolve_output_path(comfy_dir, item):
+def resolve_output_path(comfy_dir, item, output_dir=None):
     """Đường dẫn thật của 1 mục output trong history."""
     folder = _FOLDER_BY_TYPE.get(item.get("type") or "output", "output")
+    if folder == "output" and output_dir:
+        return Path(output_dir) / (item.get("subfolder") or "") / item["filename"]
     return Path(comfy_dir) / folder / (item.get("subfolder") or "") / item["filename"]
 
 
 # ------------------------------------------------------------------ chạy 1 video
 
 
-def _remove_staged(comfy_dir, name, attempts=5, delay=0.6):
+def _remove_staged(comfy_dir, name, attempts=5, delay=0.6, input_dir=None):
     """Xoá file tạm trong input của ComfyUI (Windows có thể còn giữ handle 1 lúc)."""
-    path = Path(comfy_dir) / "input" / name
+    path = Path(input_dir or (Path(comfy_dir) / "input")) / name
     for _ in range(attempts):
         try:
             path.unlink()
@@ -313,10 +335,10 @@ def _remove_staged(comfy_dir, name, attempts=5, delay=0.6):
     return not path.exists()
 
 
-def sweep_staged(comfy_dir, prefix="valo_in", min_age=60):
+def sweep_staged(comfy_dir, prefix="valo_in", min_age=60, input_dir=None):
     """Dọn file tạm của các lần chạy trước (best-effort, không đụng file mới)."""
     removed = 0
-    for path in (Path(comfy_dir) / "input").glob(f"{prefix}_*"):
+    for path in (Path(input_dir or (Path(comfy_dir) / "input"))).glob(f"{prefix}_*"):
         try:
             if time.time() - path.stat().st_mtime > min_age:
                 path.unlink()
@@ -326,11 +348,11 @@ def sweep_staged(comfy_dir, prefix="valo_in", min_age=60):
     return removed
 
 
-def stage_input(comfy_dir, input_path, prefix="valo_in"):
+def stage_input(comfy_dir, input_path, prefix="valo_in", input_dir=None):
     """Copy video vào thư mục input của ComfyUI, trả tên file để truyền vào LoadVideo."""
-    input_dir = Path(comfy_dir) / "input"
+    input_dir = Path(input_dir or (Path(comfy_dir) / "input"))
     input_dir.mkdir(parents=True, exist_ok=True)
-    sweep_staged(comfy_dir, prefix)
+    sweep_staged(comfy_dir, prefix, input_dir=input_dir)
     target = input_dir / f"{prefix}_{uuid.uuid4().hex[:8]}{Path(input_path).suffix or '.mp4'}"
     shutil.copy2(input_path, target)
     return target.name
@@ -356,6 +378,8 @@ def upscale_video(
     stop_check=None,
     keep_staged=False,
     workflow_builder=None,
+    input_dir=None,
+    output_dir=None,
 ):
     """Upscale 1 video qua RelayVSR trong ComfyUI; trả dict kết quả.
 
@@ -375,7 +399,7 @@ def upscale_video(
             + ". Cần ComfyUI master sau 06/11/2026 và weight đã tải đúng thư mục."
         )
 
-    staged = stage_input(comfy_dir, input_path)
+    staged = stage_input(comfy_dir, input_path, input_dir=input_dir)
     builder = workflow_builder or build_relayvsr_workflow
     if workflow_builder is not None:
         workflow = builder(staged, model_file, vae_file)
@@ -393,7 +417,7 @@ def upscale_video(
         raise ComfyError(f"ComfyUI chạy xong nhưng không có file kết quả: {json.dumps(entry)[:400]}")
 
     first = outputs[0]
-    source = resolve_output_path(comfy_dir, first)
+    source = resolve_output_path(comfy_dir, first, output_dir=output_dir)
     if not source.exists():
         raise ComfyError(f"Không thấy file kết quả của ComfyUI: {source}")
 
@@ -402,7 +426,7 @@ def upscale_video(
     shutil.move(str(source), str(output_path))
 
     if not keep_staged:
-        _remove_staged(comfy_dir, staged)
+        _remove_staged(comfy_dir, staged, input_dir=input_dir)
 
     info = probe.get_media_info(output_path)
     src_info = probe.get_media_info(input_path)
@@ -423,15 +447,59 @@ def upscale_video(
 # ------------------------------------------------------------------ server
 
 
-def start_server(comfy_dir, port=8188, extra_args=(), log_path=None, env=None):
-    """Chạy ComfyUI headless (không tự mở trình duyệt). Trả Popen."""
+def start_instance(comfy_dir, port=8188, gpu=None, root=None, extra_args=(), log_path=None, env=None,
+                   wait=True, timeout=900, log=None):
+    """Chạy 1 instance ComfyUI headless, có thể ghim vào 1 GPU và tách thư mục vào/ra riêng.
+
+    Dùng để chạy **nhiều instance song song** (mỗi GPU một instance) mà vẫn **dùng chung thư mục
+    ``models``**: mỗi instance có ``--input-directory``/``--output-directory``/``--temp-directory``
+    riêng, còn ``--base-directory`` trỏ về cùng thư mục ComfyUI.
+    """
     comfy_dir = Path(comfy_dir)
-    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(port), "--disable-auto-launch"]
+    base_root = Path(root or comfy_dir)
+    instance_root = base_root / f"instance_{port}"
+    dirs = {
+        "input_dir": instance_root / "input",
+        "output_dir": instance_root / "output",
+        "temp_dir": instance_root / "temp",
+        "user_dir": instance_root / "user",
+    }
+    for path in dirs.values():
+        path.mkdir(parents=True, exist_ok=True)
+
+    # input/output/temp/user riêng cho từng instance; models dùng chung qua --base-directory
+    # (user-dir riêng để 2 instance không tranh nhau database SQLite)
+    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(port),
+           "--disable-auto-launch", "--base-directory", str(comfy_dir),
+           "--input-directory", str(dirs["input_dir"]), "--output-directory", str(dirs["output_dir"]),
+           "--temp-directory", str(dirs["temp_dir"]), "--user-directory", str(dirs["user_dir"])]
     cmd += [str(a) for a in extra_args]
+
+    run_env = dict(env or os.environ)
+    if gpu is not None:
+        run_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+
+    if log_path:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     handle = open(log_path, "wb") if log_path else subprocess.DEVNULL
-    proc = subprocess.Popen(cmd, cwd=str(comfy_dir), stdout=handle, stderr=subprocess.STDOUT, env=env)
+    proc = subprocess.Popen(cmd, cwd=str(comfy_dir), stdout=handle, stderr=subprocess.STDOUT, env=run_env)
     proc._valo_log = handle  # giữ tham chiếu để không bị đóng
-    return proc
+
+    try:
+        instance = ComfyInstance(comfy_dir=str(comfy_dir), base=f"http://127.0.0.1:{port}", proc=proc,
+                                 gpu=gpu, **{k: str(v) for k, v in dirs.items()})
+        if wait:
+            wait_ready(instance.base, timeout=timeout, log=log, proc=proc, log_path=log_path)
+    except BaseException:  # không để lại tiến trình mồ côi
+        stop_server(proc)
+        raise
+    return instance
+
+
+def start_server(comfy_dir, port=8188, extra_args=(), log_path=None, env=None):
+    """Chạy ComfyUI headless (không tự mở trình duyệt). Trả Popen (API cũ)."""
+    instance = start_instance(comfy_dir, port=port, extra_args=extra_args, log_path=log_path, env=env, wait=False)
+    return instance.proc
 
 
 def stop_server(proc):
@@ -441,6 +509,120 @@ def stop_server(proc):
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+@dataclass
+class ComfyInstance:
+    """Một instance ComfyUI (thường là 1 GPU) với thư mục vào/ra riêng."""
+
+    comfy_dir: str
+    base: str
+    input_dir: str = None
+    output_dir: str = None
+    temp_dir: str = None
+    user_dir: str = None
+    gpu: object = None
+    proc: object = None
+    results: list = field(default_factory=list)
+
+    def upscale(self, input_path, output_path, **kwargs):
+        return upscale_video(input_path, output_path, comfy_dir=self.comfy_dir, base=self.base,
+                             input_dir=self.input_dir, output_dir=self.output_dir, **kwargs)
+
+    def stop(self):
+        stop_server(self.proc)
+
+
+def start_instances(comfy_dir, ports=None, gpus=None, root=None, extra_args=(), log_dir=None, log=None):
+    """Bật nhiều instance ComfyUI (mỗi GPU một instance), dùng chung thư mục models.
+
+    Trả danh sách :class:`ComfyInstance`. Nhớ gọi ``stop()``/``stop_instances()`` khi xong
+    (hoặc dùng :func:`run_clips_parallel` để tự dọn).
+    """
+    if gpus is None:
+        try:
+            import torch  # noqa: PLC0415
+
+            count = torch.cuda.device_count()
+        except Exception:
+            count = 0
+        gpus = list(range(count)) if count > 0 else [None]
+    elif isinstance(gpus, (int, str)) or gpus is None:
+        gpus = [gpus]
+    else:
+        gpus = list(gpus)
+
+    ports = list(ports) if ports else [8188 + index for index in range(len(gpus))]
+    if len(ports) != len(gpus):
+        raise ComfyError(f"Số port ({len(ports)}) phải bằng số GPU ({len(gpus)}).")
+
+    instances = []
+    try:
+        for gpu, port in zip(gpus, ports):
+            if log:
+                log(f"Khởi động ComfyUI ở port {port}" + (f" (GPU {gpu})" if gpu is not None else ""))
+            instances.append(start_instance(
+                comfy_dir, port=port, gpu=gpu, root=root, extra_args=extra_args,
+                log_path=str(Path(log_dir) / f"comfy_{port}.log") if log_dir else None, log=log,
+            ))
+    except Exception:
+        stop_instances(instances)
+        raise
+    return instances
+
+
+def stop_instances(instances):
+    for instance in instances or []:
+        try:
+            instance.stop()
+        except Exception:
+            pass
+
+
+def run_clips_parallel(clips, out_dir, *, comfy_dir, gpus=None, ports=None, scale=2, model_file=None,
+                       vae_file=None, root=None, log_dir=None, extra_args=(), on_log=None, stop_check=None,
+                       **upscale_kwargs):
+    """Chạy nhiều clip **song song**: mỗi GPU một instance ComfyUI, chia clip theo vòng.
+
+    Lưu ý: cách này tăng **thông lượng khi có nhiều clip** (2 GPU ≈ 2× số clip mỗi giờ),
+    không làm 1 clip chạy nhanh hơn. Muốn 1 clip dùng 2 GPU thì phải dùng LightX2V
+    với config ``relayvsr_x2_sp.json`` (xem README).
+    """
+    clips = [Path(c) for c in clips]
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log = on_log or (lambda text: None)
+    if not clips:
+        return {"results": [], "errors": [], "instances": 0, "clips": [], "wall": 0.0}
+
+    started = time.time()
+    instances = start_instances(comfy_dir, ports=ports, gpus=gpus, root=root, log_dir=log_dir,
+                                extra_args=extra_args, log=log)
+    results, errors = [None] * len(clips), []
+    try:
+        with ThreadPoolExecutor(max_workers=len(instances)) as pool:
+            futures = {}
+            for index, clip in enumerate(clips):
+                instance = instances[index % len(instances)]
+                scale_for_clip = int(scale)
+                output = out_dir / f"{clip.stem}_relayvsr_x{scale_for_clip}.mp4"
+                log(f"→ [{index + 1}/{len(clips)}] {clip.name} (port {instance.base.rsplit(':', 1)[-1]})")
+                futures[pool.submit(instance.upscale, clip, output, scale=scale_for_clip, model_file=model_file,
+                                    vae_file=vae_file, stop_check=stop_check, **upscale_kwargs)] = index
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    result = future.result()
+                    results[index] = result
+                    log(f"✔ [{index + 1}/{len(clips)}] {clips[index].name} — "
+                        f"{result['info']['width']}x{result['info']['height']} • {result['elapsed']:.1f}s")
+                except Exception as exc:  # noqa: BLE001 - báo hết rồi trả về
+                    errors.append((clips[index].name, str(exc)))
+                    log(f"✗ [{index + 1}/{len(clips)}] {clips[index].name}: {exc}")
+    finally:
+        stop_instances(instances)
+    return {"results": results, "errors": errors, "instances": len(instances),
+            "clips": [str(c) for c in clips], "wall": time.time() - started}
 
 
 def _hf_token(token=None):
