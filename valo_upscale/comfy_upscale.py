@@ -448,31 +448,32 @@ def upscale_video(
 
 
 def start_instance(comfy_dir, port=8188, gpu=None, root=None, extra_args=(), log_path=None, env=None,
-                   wait=True, timeout=900, log=None):
-    """Chạy 1 instance ComfyUI headless, có thể ghim vào 1 GPU và tách thư mục vào/ra riêng.
+                   wait=True, timeout=900, log=None, isolate=False):
+    """Chạy 1 instance ComfyUI headless.
 
-    Dùng để chạy **nhiều instance song song** (mỗi GPU một instance) mà vẫn **dùng chung thư mục
-    ``models``**: mỗi instance có ``--input-directory``/``--output-directory``/``--temp-directory``
-    riêng, còn ``--base-directory`` trỏ về cùng thư mục ComfyUI.
+    ``isolate=False`` (mặc định): dùng nguyên thư mục input/output mặc định của ComfyUI
+    (``<comfy_dir>/input``, ``<comfy_dir>/output``) — giống cách chạy 1 instance đơn.
+
+    ``isolate=True``: instance có ``input``/``output``/``temp``/``user`` **riêng** nhưng vẫn **dùng chung
+    ``models``** (qua ``--base-directory``). Cần khi chạy nhiều instance song song, để chúng không tranh
+    nhau file và database SQLite.
     """
     comfy_dir = Path(comfy_dir)
-    base_root = Path(root or comfy_dir)
-    instance_root = base_root / f"instance_{port}"
-    dirs = {
-        "input_dir": instance_root / "input",
-        "output_dir": instance_root / "output",
-        "temp_dir": instance_root / "temp",
-        "user_dir": instance_root / "user",
-    }
-    for path in dirs.values():
-        path.mkdir(parents=True, exist_ok=True)
-
-    # input/output/temp/user riêng cho từng instance; models dùng chung qua --base-directory
-    # (user-dir riêng để 2 instance không tranh nhau database SQLite)
+    dirs = {"input_dir": None, "output_dir": None, "temp_dir": None, "user_dir": None}
     cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(port),
-           "--disable-auto-launch", "--base-directory", str(comfy_dir),
-           "--input-directory", str(dirs["input_dir"]), "--output-directory", str(dirs["output_dir"]),
-           "--temp-directory", str(dirs["temp_dir"]), "--user-directory", str(dirs["user_dir"])]
+           "--disable-auto-launch", "--base-directory", str(comfy_dir)]
+    if isolate:
+        instance_root = Path(root or comfy_dir) / f"instance_{port}"
+        dirs = {
+            "input_dir": instance_root / "input",
+            "output_dir": instance_root / "output",
+            "temp_dir": instance_root / "temp",
+            "user_dir": instance_root / "user",
+        }
+        for path in dirs.values():
+            path.mkdir(parents=True, exist_ok=True)
+        cmd += ["--input-directory", str(dirs["input_dir"]), "--output-directory", str(dirs["output_dir"]),
+                "--temp-directory", str(dirs["temp_dir"]), "--user-directory", str(dirs["user_dir"])]
     cmd += [str(a) for a in extra_args]
 
     run_env = dict(env or os.environ)
@@ -487,7 +488,7 @@ def start_instance(comfy_dir, port=8188, gpu=None, root=None, extra_args=(), log
 
     try:
         instance = ComfyInstance(comfy_dir=str(comfy_dir), base=f"http://127.0.0.1:{port}", proc=proc,
-                                 gpu=gpu, **{k: str(v) for k, v in dirs.items()})
+                                 gpu=gpu, **{k: (str(v) if v else None) for k, v in dirs.items()})
         if wait:
             wait_ready(instance.base, timeout=timeout, log=log, proc=proc, log_path=log_path)
     except BaseException:  # không để lại tiến trình mồ côi
@@ -562,7 +563,7 @@ def start_instances(comfy_dir, ports=None, gpus=None, root=None, extra_args=(), 
             if log:
                 log(f"Khởi động ComfyUI ở port {port}" + (f" (GPU {gpu})" if gpu is not None else ""))
             instances.append(start_instance(
-                comfy_dir, port=port, gpu=gpu, root=root, extra_args=extra_args,
+                comfy_dir, port=port, gpu=gpu, root=root, extra_args=extra_args, isolate=True,
                 log_path=str(Path(log_dir) / f"comfy_{port}.log") if log_dir else None, log=log,
             ))
     except Exception:
