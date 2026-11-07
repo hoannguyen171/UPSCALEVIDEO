@@ -17,6 +17,7 @@ Bỏ hoàn toàn phần khoá bản quyền (Google Apps Script, Machine ID, HMA
 | Video: tách frame → AI → ghép lại + giữ audio | `upscale_video()` (ffmpeg + torch) |
 | Batch nhiều file, queue, tự fallback khi AI lỗi | `process_media()` + CLI nhận nhiều file/thư mục/glob |
 | Giao diện Electron | `python -m valo_upscale.app` (Gradio, chạy trên Colab/Kaggle) |
+| (bổ sung) Upscale video bằng RelayVSR — model diffusion của Wan 2.2 | notebook `relayvsr_kaggle.ipynb` + `python -m valo_upscale.comfy_upscale` (chạy trong ComfyUI) |
 | Khoá bản quyền / mã máy | ❌ bỏ (bản tự viết lại, không có license server) |
 
 ---
@@ -174,7 +175,8 @@ valo_upscale/
 ├── remote.py      # đọc thư mục công khai (Drive/GitHub/Dropbox/HTTP) + đẩy kết quả ngược lên
 ├── cli.py         # dòng lệnh
 ├── app.py         # UI Gradio (file trên máy)
-└── kaggle_app.py  # UI Gradio cho luồng "link thư mục công khai" + chế độ headless
+├── kaggle_app.py  # UI Gradio cho luồng "link thư mục công khai" + chế độ headless
+└── comfy_upscale.py  # client ComfyUI headless: chạy RelayVSR (video SR diffusion), tải weight, dựng workflow
 ```
 
 Điểm khác biệt kỹ thuật so với bản gốc (đã kiểm chứng khi port):
@@ -348,6 +350,11 @@ Nếu VRAM không đủ: tự động hạ batch/bật tile, hoặc đặt tay `
 | Tự hạ tải khi "hết VRAM" (giả lập OOM) | vẫn ra kết quả 256×256 đúng, batch tự về 1 |
 | Probe NVENC/NVDEC | trả `False` đúng trên máy không có GPU (probe NVDEC phải ép `hwdownload` mới chính xác) |
 | Pipeline 3 tầng | nhanh hơn 2,06× khi compute bằng nhau (mục 10) |
+| RelayVSR — node & input của ComfyUI | ComfyUI master `1332fab` (06/11/2026): đủ 9 node, tên input khớp graph dựng bằng code |
+| RelayVSR — workflow hợp lệ | chạy tới node `UNETLoader` rồi mới lỗi khi nạp weight giả (`Error while deserializing header`) — không có lỗi schema |
+| RelayVSR — client + node video core (graph stub, trên server thật) | `LoadVideo→GetVideoComponents→CreateVideo→SaveVideo` ra mp4 240×136/10 fps, **giữ audio**, client copy được file ra ngoài |
+| RelayVSR — `upscale_video()` end-to-end (graph stub) | trả file kết quả, giữ kích thước + audio, dọn file tạm trong `input/`, báo đúng `expected_size` (2x) |
+| RelayVSR — suy luận thật | **chưa kiểm chứng** (máy dev không có GPU) — phải chạy trên Kaggle |
 
 Kiến trúc mạng được đối chiếu trực tiếp với mã nguồn gốc `BasicSR/basicsr/archs/rrdbnet_arch.py`
 và `Real-ESRGAN/realesrgan/archs/srvgg_arch.py`.
@@ -358,3 +365,100 @@ Lưu ý: `realesrgan-ncnn-vulkan.exe` của app gốc **không chạy được**
 Chưa chạy thật với endpoint Google Drive / Dropbox (máy này không có credential): các nhánh đó đã được
 kiểm tới tầng HTTP/API (server giả lập nhận đúng request) và tầng gọi thư viện (`gdown`, `MediaFileUpload`),
 nhưng lần chạy thật đầu tiên trên Kaggle vẫn nên thử với 1 file nhỏ.
+
+## 12. RelayVSR — upscale video bằng model diffusion (qua ComfyUI)
+
+[Comfy-Org/RelayVSR](https://huggingface.co/Comfy-Org/RelayVSR) là bản int8 đóng gói cho ComfyUI của
+[kopper/RelayVSR](https://huggingface.co/kopper/RelayVSR) — **video super-resolution** kiểu diffusion:
+chỉ **mỗi frame thứ 15** đi qua model Wan 2.2 (sparse keyframes), phần còn lại do decoder "flash" tái tạo.
+Chạy **1 step, CFG 1.0**, và giữ nguyên audio của clip gốc.
+
+Hệ số phóng đại **do checkpoint quyết định** (2× hoặc 4×), không phải tham số như Real-ESRGAN.
+
+| | Real-ESRGAN (mục 2) | RelayVSR |
+|---|---|---|
+| Cách chạy | từng frame, PyTorch trong repo này | graph ComfyUI, 1 step |
+| Hệ số | 2/3/4/6/8 tuỳ chọn | cố định 2× hoặc 4× theo checkpoint |
+| Audio | ffmpeg ghép lại sau | truyền thẳng trong graph (giữ nguyên, không remux) |
+| Điểm mạnh | nhanh, upscale hàng loạt | thêm chi tiết "sinh" mới, **giảm nhấp nháy theo thời gian** |
+| Tốc độ tham chiếu | T4: vài fps/frame | H100: 45,4 fps cho 1024×768→2048×1536 (x2); 12,6 fps cho 4× output |
+| Khi nào dùng | mọi lúc, nhất là batch lớn | clip AI bị flicker, cần bản nét hơn hẳn |
+
+### Yêu cầu
+
+* **ComfyUI master sau 06/11/2026** (PR #17511 của kijai) — bản release cũ **chưa có** node
+  `RelayVSRConditioning` và `VSRDecode`. Notebook tự clone master và kiểm tra.
+* Weight int8 (Comfy-Org), **không trộn x2 với x4**:
+
+| Scale | File model → `models/diffusion_models/` | File VAE → `models/vae/` |
+|---|---|---|
+| 2× | `relayvsr_x2_lightx2v_int8_convrot.safetensors` (5,16 GB) | `relayvsr_flash_vae_x2_fp32.safetensors` (122 MB) |
+| 4× | `relayvsr_x4_int8_convrot.safetensors` (5,16 GB) | `relayvsr_flash_vae_x4_fp32.safetensors` (122 MB) |
+
+* Kaggle: *Accelerator = GPU T4 x2*, **Internet = On**, trống ≥ 6 GB đĩa. T4 16 GB dùng được với bản int8
+  (nếu OOM thì thêm `--lowvram`, hoặc dùng cấu hình block-offload của LightX2V).
+
+### Chạy
+
+Notebook: **`relayvsr_kaggle.ipynb`** — clone ComfyUI → tải weight → chạy server headless → upscale →
+hiển thị kết quả (nhận cả đường dẫn local, `/kaggle/input`, hoặc **link thư mục công khai** qua `remote.py`).
+
+Bằng CLI:
+
+```bash
+python -m valo_upscale.comfy_upscale --download --comfy-dir /kaggle/working/ComfyUI --scale 2
+python -m valo_upscale.comfy_upscale --check    --comfy-dir /kaggle/working/ComfyUI --scale 2
+python -m valo_upscale.comfy_upscale --input clip.mp4 --out ket_qua.mp4 \
+       --comfy-dir /kaggle/working/ComfyUI --scale 2
+```
+
+Bằng thư viện:
+
+```python
+from valo_upscale import comfy_upscale as cu
+
+cu.wait_ready("http://127.0.0.1:8188")
+result = cu.upscale_video("clip.mp4", "out.mp4", comfy_dir="/kaggle/working/ComfyUI", scale=2,
+                          detail=1.0, progress=lambda sec, state: print(sec, state))
+print(result["info"], result["size_ok"])
+```
+
+Server có thể tự bật từ Python (đúng như notebook làm):
+
+```python
+proc = cu.start_server("/kaggle/working/ComfyUI", port=8188, extra_args=("--lowvram",))
+cu.wait_ready("http://127.0.0.1:8188", timeout=900)
+```
+
+### Graph dựng bằng code (thuần node core)
+
+```
+LoadVideo → GetVideoComponents ─┬→ RelayVSRConditioning → KSampler(1 step, cfg 1) → VSRDecode
+                                └→ (images, audio, fps) ──────────────→ CreateVideo → SaveVideo
+```
+
+* `RelayVSRConditioning(model, images)` → `positive` + `latent` rỗng; `VSRDecode(vae, samples, images, detail)`
+  → ảnh đã upscale (`detail` 0→1: giữ bao nhiêu phần chi tiết model thêm vào bản bicubic).
+* `comfy_upscale.build_relayvsr_workflow()` dựng graph; tham số `steps=1`, `cfg=1.0`,
+  `sampler="euler"`, `scheduler="simple"`, `detail=1.0` — **chưa có template chính thức** cho model này
+  (repo `Comfy-Org/workflow_templates` chưa có file nào), tài liệu của ComfyUI chỉ nói "1 step, cfg 1";
+  với 1 step thì chọn sampler/scheduler gần như không đổi kết quả, và có thể đổi qua tham số.
+* Vài chi tiết dễ sai, đã phát hiện khi viết client: input `format` của `SaveVideo` là **DynamicCombo** nên
+  phải truyền **chuỗi** `"mp4"` (truyền dict → node bị gọi thiếu tham số `format`); history của ComfyUI còn
+  chứa một mục `type="input"` (file gốc do `LoadVideo` trả về) nên phải lọc khi lấy kết quả; và trên Windows
+  file tạm trong `input/` có thể còn bị giữ handle → phải thử xoá lại vài lần.
+
+### Trục trặc thường gặp
+
+| Hiện tượng | Xử lý |
+|---|---|
+| `check_ready` báo thiếu node | Cập nhật ComfyUI lên master (ô 2 của notebook) |
+| OOM trên T4 | `extra_args=("--lowvram",)`, hoặc chia clip thành đoạn ngắn |
+| Lỗi khi nạp model int8 trên Turing | Đổi sang weight fp của `kopper/RelayVSR` (`wan.safetensors` 9,6 GB + `flash.safetensors` 122 MB) và trỏ `model_file`/`vae_file` sang tên file đó |
+| Muốn dùng cả 2 GPU | Đường LightX2V có `relayvsr_x2_sp.json` (sequence parallel 2 GPU) và `relayvsr_x2_block_offload.json`; đổi lại là cài LightX2V (nặng hơn ComfyUI) |
+| Muốn UI trực quan thay vì headless | Custom node cộng đồng `bbaudio-2025/Comfyui-Relay-VSR` (có node "Upscale Streaming" pixel-in/pixel-out) |
+
+Link tham khảo: [model card gốc](https://huggingface.co/kopper/RelayVSR) ·
+[RelayVSR X2 của LightX2V](https://huggingface.co/lightx2v/RelayVSR_X2) ·
+[hướng dẫn LightX2V](https://github.com/ModelTC/LightX2V/tree/main/scripts/relayvsr) ·
+[wiki ComfyUI về RelayVSR X2](https://comfyui-wiki.com/en/news/2026-10-29-relayvsr-x2)
