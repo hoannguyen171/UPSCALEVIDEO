@@ -365,6 +365,7 @@ Nếu VRAM không đủ: tự động hạ batch/bật tile, hoặc đặt tay `
 | RelayVSR — token HF thật | `whoami` OK (user `hoanvg17195`), repo public truy cập được |
 | RelayVSR — 2 GPU cho nhiều clip | 2 instance ComfyUI: port riêng, `input/output/temp/user` riêng, **chung `models`**, `check_ready` OK trên cả hai, 4 clip chạy **chồng thời gian** (chứng minh song song), kết quả đúng thứ tự + giữ audio, dọn sạch file tạm |
 | RelayVSR — 1 instance vẫn giữ luồng cũ | `start_server`/`start_instance(isolate=False)` dùng nguyên `input`/`output` mặc định của ComfyUI; chỉ `start_instances` mới tách thư mục (test cũ chạy lại: 24/24 PASS, không hồi quy) |
+| Liệt kê kết quả trong notebook | Ô "Liệt kê / nén kết quả" quét **cả thư mục con** (`rglob`) — trước đây ô 6b ghi vào `<OUT_DIR>/song_song/` nên ô liệt kê (chỉ quét 1 cấp) báo 0 file; test mô phỏng đúng cây thư mục đó: 3 file/2 thư mục, zip chứa cả file lồng, không crash ngoài Colab |
 | RelayVSR — chống treo khi ComfyUI chết lúc khởi động | `wait_ready(..., proc=, log_path=)` phát hiện tiến trình thoát và in log cuối (thay vì chờ hết 900s) |
 | RelayVSR — tải cả x2 và x4 | 25/25 PASS (`_smoke/test_hf_weights.py`): `normalize_scales` nhận `2` / `4` / `"2,4"` / list (bỏ trùng, giữ thứ tự), hệ số sai bị chặn; tải cả 2 cặp = **4 file đúng tên**, mỗi lần gọi đều mang token |
 | RelayVSR — tên file trên Hub | 4/4 file (x2 + x4, model + VAE) tồn tại thật trên `Comfy-Org/RelayVSR` (kiểm qua HfApi) |
