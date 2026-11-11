@@ -414,18 +414,23 @@ def upscale_video(
     input_dir=None,
     output_dir=None,
     required_nodes=None,
+    extra_combos=None,
+    allow_default_weights=True,
 ):
     """Upscale 1 video qua RelayVSR trong ComfyUI; trả dict kết quả.
 
     ``workflow_builder`` cho phép thay graph mặc định (dùng khi test hoặc khi bạn muốn
     tự chỉnh workflow), với chữ ký ``(video_file, model_file, vae_file) -> dict``.
     """
-    if model_file is None or vae_file is None:
+    if allow_default_weights and (model_file is None or vae_file is None):
+        # mặc định của RelayVSR: điền tên weight theo hệ số. Đường ReCaVSR (hoặc ai truyền
+        # extra_combos riêng) phải tắt để KHÔNG bị kiểm nhầm combo của RelayVSR.
         default_model, default_vae = model_files(scale)
         model_file = model_file or default_model
         vae_file = vae_file or default_vae
 
-    ready = check_ready(base, model_file, vae_file, required_nodes=required_nodes)
+    ready = check_ready(base, model_file, vae_file, required_nodes=required_nodes,
+                        extra_combos=extra_combos)
     if not ready["ok"]:
         raise ComfyError(
             "ComfyUI chưa sẵn sàng: "
@@ -444,7 +449,10 @@ def upscale_video(
         )
     started = time.time()
     prompt_id = queue_prompt(base, workflow, client_id=uuid.uuid4().hex)
-    entry = wait_prompt(base, prompt_id, timeout=timeout, on_progress=progress, stop_check=stop_check)
+    # wait_prompt gọi callback 2 tham số (giây, trạng thái) còn `progress` của upscale_video là
+    # 3 tham số (phần trăm, giai đoạn, mô tả) → phải bọc lại, nếu không sẽ TypeError khi chờ.
+    waiting = (lambda seconds, state: progress(0, "waiting", f"{state} • {seconds}s")) if progress else None
+    entry = wait_prompt(base, prompt_id, timeout=timeout, on_progress=waiting, stop_check=stop_check)
 
     outputs = collect_outputs(entry)
     if not outputs:

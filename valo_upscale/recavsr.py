@@ -226,11 +226,18 @@ def upscale_video(input_path, output_path, *, comfy_dir, base="http://127.0.0.1:
         return build_workflow(video_file, name, scale=scale, color_fix=color_fix, seed=seed, decoder=decoder,
                               kernels=kernels, kv_offload=kv_offload, encoder=encoder)
 
-    return _comfy_upscale_video(
+    # LƯU Ý: KHÔNG truyền name qua model_file — client chung sẽ kiểm nó trong combo của UNETLoader
+    # (models/diffusion_models của RelayVSR) và báo sai. Weight của ReCaVSR nằm trong combo
+    # `ReCaVSRLoader.transformer` (models/recavsr), nên kiểm bằng extra_combos.
+    result = _comfy_upscale_video(
         input_path, output_path, comfy_dir=comfy_dir, base=base, scale=float(scale),
-        model_file=name, vae_file=None, workflow_builder=builder, timeout=timeout, progress=progress,
-        stop_check=stop_check, required_nodes=CORE_NODES + RECAVSR_NODES, **kwargs,
+        model_file=None, vae_file=None, workflow_builder=builder, timeout=timeout, progress=progress,
+        stop_check=stop_check, required_nodes=CORE_NODES + RECAVSR_NODES,
+        extra_combos=(("ReCaVSRLoader", "transformer", name),), allow_default_weights=False, **kwargs,
     )
+    result["model_file"] = name
+    result["precision"] = resolve_precision(precision)
+    return result
 
 
 def describe(kind="int8"):
