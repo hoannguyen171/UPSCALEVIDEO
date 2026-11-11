@@ -31,6 +31,17 @@ def worker_template_path():
 
 WORKER_TEMPLATE = worker_template_path()
 
+# Số lần mở tunnel mới rồi đẩy lại kernel khi kernel không tải được video (tunnel quick của cloudflared
+# có thể chết trong lúc kernel còn xếp hàng GPU — hàng đợi T4 có lúc tới 15 phút).
+TUNNEL_RETRIES = 2
+TUNNEL_FAILURE_HINTS = ("không tải được video", "http error 530", "http error 502", "http error 1033", "tunnel")
+
+
+def looks_like_tunnel_failure(text):
+    """Lỗi này có phải do không tải được video qua tunnel không?"""
+    low = (text or "").lower()
+    return any(hint in low for hint in TUNNEL_FAILURE_HINTS)
+
 
 @dataclass
 class RunOptions:
@@ -99,12 +110,16 @@ class Runner:
         work = self._work_dir()
 
         self._set("sharing")
-        self.share = FileShareServer(video, token=opts.share_token)
-        self.share.start()
+        if self.share is None:                       # mở tunnel mới ở lần chạy lại thì giữ nguyên server này
+            self.share = FileShareServer(video, token=opts.share_token)
+            self.share.start()
         self.log(f"Đang chia sẻ {video.name} ({video.stat().st_size / 1048576:.1f} MB) ở {self.share.local_url}")
 
         exe = opts.cloudflared or ensure_cloudflared(work / "bin", log=self.log)
         self._set("tunnel")
+        if self.tunnel is not None:                  # đóng tunnel cũ để không bỏ lại tiến trình cloudflared
+            self.tunnel.stop()
+            self.tunnel = None
         self.tunnel = start_quick_tunnel(self.share.port, exe, log=self.log, log_path=work / "cloudflared.log")
         if opts.public_check_timeout and not wait_public(self.tunnel.url, timeout=opts.public_check_timeout):
             self.log("Cảnh báo: /health qua tunnel chưa trả ok — vẫn thử tiếp")
@@ -177,21 +192,35 @@ class Runner:
         opts = self.options
         plan = self.prepare(video_url=video_url)
         try:
-            self._set("push")
-            self.log("Đang đẩy kernel lên Kaggle (lần đầu sẽ cài ComfyUI + tải weight 6,3 GB nên khá lâu)...")
-            ref = self.kaggle.push(self.kernel_dir)
-            self.log(f"Kernel: https://www.kaggle.com/code/{ref}")
+            for attempt in range(1, TUNNEL_RETRIES + 2):
+                self._set("push")
+                self.log("Đang đẩy kernel lên Kaggle (lần đầu sẽ cài ComfyUI + tải weight 6,3 GB nên khá lâu)...")
+                ref = self.kaggle.push(self.kernel_dir)
+                self.log(f"Kernel: https://www.kaggle.com/code/{ref}")
 
-            self._set("waiting")
-            state = self.kaggle.wait(ref, on_progress=lambda st, seconds: self.on_state("waiting", f"{st} ({seconds}s)"),
-                                     interval=opts.wait_interval, timeout=opts.timeout)
+                self._set("waiting")
+                state = self.kaggle.wait(
+                    ref, on_progress=lambda st, seconds: self.on_state("waiting", f"{st} ({seconds}s)"),
+                    interval=opts.wait_interval, timeout=opts.timeout)
 
-            # chỉ tải file cần (json/log/mp4): output của job ComfyUI có thể tới ~1500 file vài GB
-            self._set("downloading")
-            out_dir = self._work_dir() / "kaggle_output"
-            fetch = getattr(self.kaggle, "fetch_files", None) or self.kaggle.output
-            fetch(ref, out_dir)
-            found = kc.find_result(out_dir)
+                # chỉ tải file cần (json/log/mp4): output của job ComfyUI có thể tới ~1500 file vài GB
+                self._set("downloading")
+                out_dir = self._work_dir() / f"kaggle_output{'' if attempt == 1 else f'_lan{attempt}'}"
+                fetch = getattr(self.kaggle, "fetch_files", None) or self.kaggle.output
+                fetch(ref, out_dir)
+                found = kc.find_result(out_dir)
+                if state == "complete" and found["video"]:
+                    break
+
+                reason = (found["result"] or {}).get("error") if found["result"] else None
+                log_text = Path(found["log"]).read_text(encoding="utf-8", errors="replace")[-2000:] if found["log"] else ""
+                if attempt <= TUNNEL_RETRIES and looks_like_tunnel_failure(f"{reason} {log_text}"):
+                    self.log(f"Kernel ({state}) không tải được video qua tunnel — thường do tunnel quick của "
+                             f"cloudflared chết trong lúc kernel xếp hàng GPU. Mở tunnel MỚI rồi đẩy lại (lần "
+                             f"{attempt + 1}/{TUNNEL_RETRIES + 1})...")
+                    new_url = self.prepare_tunnel()          # tunnel mới, server chia sẻ giữ nguyên
+                    plan = self.prepare(video_url=new_url)   # chèn URL mới vào worker
+                    continue
 
             if state != "complete":
                 reason = (found["result"] or {}).get("error") if found["result"] else None

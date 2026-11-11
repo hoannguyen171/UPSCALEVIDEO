@@ -93,12 +93,30 @@ class QuickTunnel:
         return self.proc is not None and self.proc.poll() is None
 
     def stop(self):
+        """Dừng cloudflared.
+
+        Trên Windows, nếu ``exe`` là một shim ``.cmd``/``.bat`` thì tiến trình thật là **con** của nó:
+        ``terminate()`` chỉ giết shim và để tiến trình con sống tiếp. Vì vậy phải giết cả cây.
+        """
         if self.alive:
-            self.proc.terminate()
+            proc = self.proc
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                               capture_output=True, check=False)
+            else:
+                proc.terminate()
             try:
-                self.proc.wait(timeout=15)
+                proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
+                proc.kill()
+        # đóng file log nếu tunnel này mở nó (nếu không, Windows giữ file và không xoá được thư mục)
+        handle = getattr(self, "log_handle", None)
+        if handle is not None and hasattr(handle, "close"):
+            try:
+                handle.close()
+            except Exception:                      # noqa: BLE001 - dọn dẹp, không được ném lỗi
+                pass
+            self.log_handle = None
 
 
 def start_quick_tunnel(port, exe, timeout=120, log=None, log_path=None):
@@ -134,7 +152,9 @@ def start_quick_tunnel(port, exe, timeout=120, log=None, log_path=None):
         raise TunnelError("cloudflared thoát mà không có URL — kiểm tra mạng/firewall")
     if log:
         log(f"Tunnel công khai: {found['url']}")
-    return QuickTunnel(proc, found["url"], log_path=str(log_path) if log_path else None)
+    tunnel = QuickTunnel(proc, found["url"], log_path=str(log_path) if log_path else None)
+    tunnel.log_handle = handle          # để stop() đóng file log (Windows giữ file nếu chưa đóng)
+    return tunnel
 
 
 def wait_public(url, timeout=60, interval=2.0):
