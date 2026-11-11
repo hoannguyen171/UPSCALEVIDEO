@@ -631,6 +631,9 @@ không cần tài khoản); chiều lấy kết quả về dùng API chính th�
 | Nhấp đúp | `Chay_App.pyw` | nếu Windows đã liên kết `.pyw` với Python |
 | **Một file .exe** | chạy **`build_exe.cmd`** một lần → `dist\ValoUpscale.exe` | nhấp đúp là mở app; máy khác không cần cài Python (vẫn cần `kaggle` CLI + `kaggle.json`) |
 
+⚠️ **Sửa `kaggle_jobs/recavsr_worker.py` thì phải build lại exe** — bản exe nhúng worker vào gói, còn bản mã nguồn
+đọc worker trong repo (`winapp/job.py::worker_template_path`).
+
 `build_exe.cmd` cài `pyinstaller`, nhúng luôn `kaggle_jobs/recavsr_worker.py` vào gói và tạo **một file duy nhất**
 `dist\ValoUpscale.exe` — bản gọn **~9,2 MB**, build ~20 s (đã loại numpy/PIL/torch để exe nhẹ và tránh lỗi đệ quy
 khi đóng gói). Vì vậy 2 nút *Kiểm tra ComfyUI ở máy* và *Chạy local* trong bản exe sẽ báo cần chạy từ mã nguồn;
@@ -698,6 +701,9 @@ VRAM tham chiếu của tác giả (int8 + FlashDecoder, fast kernels): **~11,6 
 | Kaggle thật — đăng nhập | `kaggle.json` (username + key) → `kaggle config view` + `kaggle kernels list -m` trả về kernel thật của tài khoản |
 | Kaggle thật — push→chạy→tải kết quả | kernel CPU `hoanghoannguyen1223/valo-smoke`: push OK, trạng thái `RUNNING → COMPLETE`, tải về `valo_result.json` + file sinh ra trên Kaggle (`hello from kaggle …`) |
 | Kaggle thật — job ReCaVSR int8 (GPU) | xem dòng cuối mục này |
+| Ba lỗi chỉ lộ khi chạy thật (đã sửa) | (1) worker **bỏ qua `--video-url`** vì argparse không lấy default từ `JOB` → app chia sẻ video qua tunnel nhưng kernel không tải; (2) weight int8 bị lưu **lồng thư mục** `models/recavsr/recavsr/…` (`hf_hub_download` ghép `<local_dir>/<remote>`) → ComfyUI không thấy; (3) worker để lại **1544 file / ~7 GB** (ComfyUI + weight) trong `/kaggle/working` → `kaggle kernels output` tải cả cây |
+| Cách tải output đã gọn lại | worker **dọn ComfyUI/weight** trong `finally` (cờ `keep_comfy`, mặc định tắt) → output chỉ còn video + `valo_result.json` + `valo_run.log`; app còn có `KaggleCli.fetch_files()` dùng `kagglesdk` để **chỉ tải file json/log/mp4** |
+| Khi job lỗi, app hiện lý do | `Runner.run()` tải `valo_result.json` + 12 dòng cuối `valo_run.log` ngay trong nhật ký app (trước đây phải mở Kaggle) |
 | Suy luận ReCaVSR | **chưa kiểm chứng** — cần GPU NVIDIA (máy dev không có) |
 
 Ghi chú về token Kaggle (đã thử thật): token kiểu mới `KGAT_…` **không** dùng được với CLI `kaggle` 1.7.4.5
