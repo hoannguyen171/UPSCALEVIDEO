@@ -635,6 +635,14 @@ graph LR
 Kaggle **không** cho kết nối vào notebook, nên chiều đưa video đi dùng tunnel tạm (cloudflared, app tự tải ~53 MB,
 không cần tài khoản); chiều lấy kết quả về dùng API chính thức `kaggle kernels output`.
 
+**Hàng đợi GPU làm tunnel chết**: hàng đợi T4 có lúc dài (đã gặp **14 phút**), và tunnel quick của cloudflared
+có thể chết trong lúc đó → kernel không tải được video (`HTTP Error 530`). App tự phát hiện (đọc lỗi trong
+`valo_result.json`/log worker), **mở tunnel mới rồi đẩy lại kernel** — tối đa 2 lần, có ghi rõ trong nhật ký.
+
+**Dừng tunnel đúng cách**: trên Windows nếu `cloudflared` là shim `.cmd`/`.bat` thì tiến trình thật là con của nó,
+nên `winapp/tunnel.py::QuickTunnel.stop()` giết **cả cây** (`taskkill /T /F`) và đóng file log — đã kiểm: sau khi
+chạy xong bộ test, **0 tiến trình** cloudflared còn sót (trước khi sửa: 9 tiến trình).
+
 ### Chạy bằng 1 cú nhấp
 
 | Cách | File | Ghi chú |
