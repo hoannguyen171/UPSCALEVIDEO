@@ -205,7 +205,7 @@ def main(argv=None):
         recavsr.download_weights(models_dir, args.precision, token=os.environ.get("HF_TOKEN"),
                                  source_dir="/kaggle/input" if Path("/kaggle/input").is_dir() else None, log=log,
                                  with_vae=(args.decoder == "vae"), comfy_dir=comfy_dir)
-        if args.decoder == "vae":   # chuẩn bị trước để bước suy luận không phải dừng tải 250 MB
+        if args.decoder == "vae":   # chuẩn bị trước để bước suy luận không phải dừng tải 1,34 GB
             recavsr.ensure_vae(comfy_dir, token=os.environ.get("HF_TOKEN"), log=log)
         log("weight:", [p.name for p in models_dir.glob("*.safetensors")])
 

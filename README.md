@@ -665,9 +665,20 @@ python run_win.py                               # mở ứng dụng
 
 Trong app: chọn video → chọn thư mục kết quả → *Xem trước (dry-run)* để xem kế hoạch → **BẮT ĐẦU (GPU Kaggle)**.
 
-Ước lượng thời gian (số đo thật trên T4, int8, fast kernels, clip 320×180): **≈1,5 s cho mỗi frame ở mức 2×**;
-mức 4× nặng hơn ~4 lần diện tích nên tính ~4–6 s/frame. Cộng thêm **~2,5–4 phút cố định mỗi job** (cài ComfyUI +
-tải 6,27 GB weight + khởi động) — chạy clip dài một lần rẻ hơn nhiều lần chạy clip ngắn.
+Thời gian thật của một job 2× thành công trên T4 (đọc từ `valo_run.log`, tổng **163,8 s**):
+
+| Giai đoạn | Thời gian |
+|---|---|
+| Nạp torch/CUDA, clone repo, tải video qua tunnel | 8 s |
+| Clone ComfyUI + pip (requirements, triton, opencv/hf) + node pack | 42 s |
+| Tải weight int8 + prompt + flashdecoder (6,5 GB) | 14 s (đường truyền Kaggle ~460 MB/s) |
+| Khởi động ComfyUI đến khi sẵn sàng (nạp model) | 61 s |
+| **Suy luận 24 frame 320×180 → 640×360** | **36,8 s** (≈1,5 s/frame) |
+| Dọn dẹp + ghi kết quả | 2 s |
+
+⇒ **Chi phí cố định ~2 phút/job** không phụ thuộc độ dài video, cộng ~1,5 s mỗi frame ở 2× với clip nhỏ.
+Số frame tăng theo độ phân giải đầu ra (mức 4× = 4× diện tích pixel → chậm hơn nhiều lần) [ước lượng, chưa đo
+ở 4×]. Vì vậy: chạy 1 clip dài rẻ hơn hẳn nhiều clip ngắn.
 Nhật ký chạy ngay trong cửa sổ; xong có nút mở video/thư mục kết quả. Hoặc dùng dòng lệnh:
 
 ```bash
