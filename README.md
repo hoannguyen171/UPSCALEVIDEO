@@ -695,6 +695,7 @@ python -m winapp.cli --video clip.mp4 --dry-run --json      # xem trước, khô
 | `--scale` | `4` | model huấn luyện ở 4×; T4 16 GB nên dùng `2` nếu input ≥ 640×360 |
 | `--precision` | `int8` | 6,27 GB; `bf16` là bản gốc 10,6 GB |
 | `--kernels` | `fast` | `exact` = đúng tham chiếu, chậm hơn |
+| `--decoder` | `auto` | `auto` = FlashDecoder, tự chuyển `vae` khi GPU không chạy được FlashDecoder (T4 ở 4×); `vae` chậm hơn 25–40× nhưng nhiều chi tiết hơn |
 | `--color-fix` | `none` | `adain` / `wavelet` để khớp màu với video gốc |
 | `--encoder` | `auto` | `auto` → HEVC NVENC → H.264 NVENC → x264; chọn `h264` nếu cần tương thích tối đa |
 | `--kv-offload` | tắt | bật khi output không đủ VRAM (kết quả y hệt) |
