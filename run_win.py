@@ -47,7 +47,31 @@ def self_test():
     return 0 if report["worker_template_exists"] else 1
 
 
+def dump_worker(target=None):
+    """Ghi bản worker đang được app dùng ra file — để đối chiếu với repo (kiểm exe có cập nhật không)."""
+    import shutil
+
+    from winapp import job as jobmod
+
+    source = jobmod.worker_template_path()
+    if target is None:
+        text = source.read_text(encoding="utf-8")
+        if sys.stdout is None:
+            target = Path(sys.executable).resolve().parent / "worker_from_exe.py"
+        else:
+            print(text)
+            return 0
+    shutil.copy2(source, target)
+    print(f"đã ghi worker ({source}) → {target}")
+    return 0
+
+
 if __name__ == "__main__":
-    if "--self-test" in sys.argv[1:]:
+    args = sys.argv[1:]
+    if "--self-test" in args:
         raise SystemExit(self_test())
+    if "--dump-worker" in args:
+        index = args.index("--dump-worker")
+        target = args[index + 1] if len(args) > index + 1 else None
+        raise SystemExit(dump_worker(target))
     raise SystemExit(main())
