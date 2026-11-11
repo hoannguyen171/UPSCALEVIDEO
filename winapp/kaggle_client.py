@@ -55,8 +55,12 @@ class JobSpec:
 
 
 def render_worker(template_text, job):
-    """Thay dòng ``JOB = {}`` trong worker bằng tham số thật (giữ nguyên phần còn lại)."""
-    payload = json.dumps(job, ensure_ascii=False)
+    """Thay dòng ``JOB = {}`` trong worker bằng tham số thật (giữ nguyên phần còn lại).
+
+    Dùng **literal Python** (``repr``) chứ không phải JSON: JSON sinh ``false/true/null``,
+    mà worker là script Python nên sẽ chết ngay với ``NameError: name 'false' is not defined``.
+    """
+    payload = repr(job)
     lines = []
     replaced = False
     for line in template_text.splitlines():
@@ -70,8 +74,18 @@ def render_worker(template_text, job):
     return "\n".join(lines) + "\n"
 
 
-def kernel_metadata(kernel_ref, title="Valo ReCaVSR worker", code_file="recavsr_worker.py",
+def title_for_slug(slug):
+    """Tiêu đề suy ra từ slug để Kaggle không đổi slug (Kaggle slugify tiêu đề!).
+
+    Ví dụ ``valo-recavsr`` → ``Valo Recavsr`` (slugify lại đúng bằng ``valo-recavsr``).
+    """
+    return " ".join(word.capitalize() for word in slug.replace("_", "-").split("-") if word)
+
+
+def kernel_metadata(kernel_ref, title=None, code_file="recavsr_worker.py",
                     dataset_sources=None, enable_gpu=True, enable_internet=True, is_private=True):
+    slug = str(kernel_ref).split("/")[-1]
+    title = title or title_for_slug(slug)
     return {
         "id": kernel_ref,
         "title": title,
@@ -169,6 +183,7 @@ class KaggleCli:
 
     # ------------------------------------------------------------- kernel
     def push(self, kernel_dir, timeout=1800):
+        """Đẩy kernel; trả về ref **thật** (Kaggle có thể đổi slug theo title)."""
         code, output = self._run(["kernels", "push", "-p", str(kernel_dir)], timeout=timeout)
         if code != 0:
             raise KaggleError(f"kaggle kernels push thất bại (mã {code}): {output.strip()[-400:]}")
