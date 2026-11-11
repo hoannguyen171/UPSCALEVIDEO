@@ -116,9 +116,10 @@ class KaggleCli:
         self.cwd = cwd
 
     # ------------------------------------------------------------- chạy lệnh
-    def _run(self, args, timeout=600):
+    def _run(self, args, timeout=600, log_output=True):
         cmd = [str(self.executable)] + [str(a) for a in args]
-        self.log("$ " + " ".join(cmd))
+        if log_output:
+            self.log("$ " + " ".join(cmd))
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
                                     env=self.env, cwd=str(self.cwd) if self.cwd else None)
@@ -128,8 +129,9 @@ class KaggleCli:
         except subprocess.TimeoutExpired as exc:
             raise KaggleError(f"Lệnh kaggle quá thời gian {timeout}s: {' '.join(cmd)}") from exc
         output = (result.stdout or "") + (result.stderr or "")
-        for line in output.strip().splitlines()[-4:]:
-            self.log("  | " + line[:200])
+        if log_output:
+            for line in output.strip().splitlines()[-4:]:
+                self.log("  | " + line[:200])
         return result.returncode, output
 
     # ------------------------------------------------------------- thông tin
@@ -149,12 +151,13 @@ class KaggleCli:
         data = read_json(self.credentials_path()) or {}
         username = data.get("username")
         if not username:
-            code, output = self._run(["config", "view"], timeout=120)
+            # không in log của lệnh này: khi chưa có kaggle.json thì CLI in cả traceback, gây rối mắt
+            code, output = self._run(["config", "view"], timeout=120, log_output=False)
             match = re.search(r'"username"\s*:\s*"([^"]+)"', output)
             username = match.group(1) if match else None
         if not username:
-            raise KaggleError("Chưa có username Kaggle — tạo ~/.kaggle/kaggle.json (Account → Create New API Token) "
-                              "hoặc đặt KAGGLE_USERNAME/KAGGLE_KEY")
+            raise KaggleError("Chưa có kaggle.json — mở https://www.kaggle.com/settings (mục API → Create New Token), "
+                              f"tải file rồi chép vào: {self.credentials_path()}  — hoặc đặt KAGGLE_USERNAME/KAGGLE_KEY")
         return username
 
     def has_credentials(self):

@@ -87,6 +87,7 @@ class App(Tk):
         run = ttk.Frame(self)
         run.pack(fill=X, **pad)
         ttk.Button(run, text="Kiểm tra Kaggle", command=self._check_kaggle).pack(side=LEFT, padx=4)
+        ttk.Button(run, text="Lấy kaggle.json", command=self._help_token).pack(side=LEFT, padx=4)
         ttk.Button(run, text="Xem trước (dry-run)", command=lambda: self._start(dry_run=True)).pack(side=LEFT, padx=4)
         self.start_button = ttk.Button(run, text="BẮT ĐẦU (GPU Kaggle)", command=lambda: self._start(dry_run=False))
         self.start_button.pack(side=LEFT, padx=4)
@@ -192,6 +193,22 @@ class App(Tk):
                 self.log(f"LỖI: {exc}")
                 self.log("Cài: pip install kaggle ; rồi tải kaggle.json vào %USERPROFILE%\\.kaggle\\kaggle.json")
         threading.Thread(target=work, daemon=True).start()
+
+    def _help_token(self):
+        """Mở trang Kaggle để tạo token và chỉ chỗ chép file cho đúng."""
+        import webbrowser  # noqa: PLC0415
+
+        target = kc.KaggleCli().credentials_path()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        webbrowser.open("https://www.kaggle.com/settings")
+        self.log("Đã mở https://www.kaggle.com/settings — mục API → 'Create New Token' (tải về kaggle.json)")
+        self.log(f"Chép file đó vào: {target}")
+        self.log("Cách khác: tạo file đó với nội dung {\"username\": \"tên-Kaggle\", \"key\": \"khoá-API\"}")
+        if target.exists():
+            self.log("✔ Đã thấy kaggle.json — bấm 'Kiểm tra Kaggle' để xác nhận.")
 
     def _check_comfy(self):
         def work():
