@@ -146,8 +146,8 @@ def install_valo_repo(repo_dir):
 def main(argv=None):
     global _LOG_HANDLE
     parser = argparse.ArgumentParser(description="Worker ReCaVSR trên Kaggle (ComfyUI + int8)")
-    parser.add_argument("--video", help="Đường dẫn video local (khi chạy tay)")
-    parser.add_argument("--video-url", help="URL tải video (app Windows dùng)")
+    parser.add_argument("--video", default=JOB.get("video"), help="Đường dẫn video local (khi chạy tay)")
+    parser.add_argument("--video-url", default=JOB.get("video_url"), help="URL tải video (app Windows dùng)")
     parser.add_argument("--scale", type=float, default=JOB.get("scale", 4.0))
     parser.add_argument("--precision", default=JOB.get("precision", "int8"), choices=["int8", "bf16"])
     parser.add_argument("--color-fix", default=JOB.get("color_fix", "none"), choices=["none", "adain", "wavelet"])
@@ -158,7 +158,8 @@ def main(argv=None):
     parser.add_argument("--lowvram", action="store_true", default=bool(JOB.get("lowvram", True)))
     parser.add_argument("--out-name", default=JOB.get("output_name"))
     parser.add_argument("--work-dir", default=str(WORK))
-    parser.add_argument("--keep-comfy", action="store_true", default=bool(JOB.get("keep_comfy", True)))
+    parser.add_argument("--keep-comfy", action="store_true", default=bool(JOB.get("keep_comfy", False)),
+                        help="Giữ ComfyUI + weight trong /kaggle/working (chỉ để gỡ lỗi)")
     args = parser.parse_args(argv)
 
     work = Path(args.work_dir)
@@ -243,6 +244,14 @@ def main(argv=None):
         log("LỖI:", summary["error"])
         log(traceback.format_exc()[-1500:])
     finally:
+        if not args.keep_comfy:
+            # /kaggle/working là thứ `kaggle kernels output` tải về: chỉ giữ video kết quả + json + log
+            for junk in (work / "ComfyUI", work / "input"):
+                try:
+                    shutil.rmtree(junk, ignore_errors=True)
+                except OSError:
+                    pass
+            log("đã dọn ComfyUI + weight khỏi /kaggle/working (chỉ giữ kết quả)")
         summary["total_elapsed"] = round(time.time() - started, 1)
         (work / "valo_result.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         log("=== XONG === ", json.dumps(summary, ensure_ascii=False))

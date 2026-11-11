@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 from . import probe
@@ -106,9 +107,22 @@ def download_weights(models_dir, kind="int8", token=None, source_dir=None, log=N
                 log(f"{how} từ {local} → {target}")
             paths.append(str(target))
             continue
+
+        # hf_hub_download lưu vào <local_dir>/<remote>: remote có tiền tố "recavsr/" (file int8) nên
+        # phải trỏ local_dir lên thư mục cha, nếu không file sẽ nằm lồng ở models/recavsr/recavsr/…
+        remote_parent = Path(remote).parent
+        local_dir = models_dir if str(remote_parent) in (".", "") else models_dir.parent
         if log:
             log(f"Đang tải {remote} từ {repo_id} {'(có HF_TOKEN)' if token else '(không xác thực)'} ...")
-        paths.append(hf_hub_download(repo_id=repo_id, filename=remote, local_dir=str(models_dir), token=token))
+        downloaded = Path(hf_hub_download(repo_id=repo_id, filename=remote, local_dir=str(local_dir), token=token))
+        if downloaded != target:          # phòng khi vị trí hub trả về khác dự kiến
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(downloaded), str(target))
+        if not (target.exists() and target.stat().st_size > 0):
+            raise ComfyError(f"Tải xong nhưng không thấy {target}")
+        if log:
+            log(f"  ✔ {target.name} — {target.stat().st_size / 1073741824:.2f} GB")
+        paths.append(str(target))
     return paths
 
 

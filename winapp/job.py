@@ -161,13 +161,23 @@ class Runner:
             self._set("waiting")
             state = self.kaggle.wait(ref, on_progress=lambda st, seconds: self.on_state("waiting", f"{st} ({seconds}s)"),
                                      interval=opts.wait_interval, timeout=opts.timeout)
-            if state != "complete":
-                raise kc.KaggleError(f"Kernel kết thúc với trạng thái {state} — mở log trên Kaggle để xem chi tiết")
 
+            # chỉ tải file cần (json/log/mp4): output của job ComfyUI có thể tới ~1500 file vài GB
             self._set("downloading")
             out_dir = self._work_dir() / "kaggle_output"
-            self.kaggle.output(ref, out_dir)
+            fetch = getattr(self.kaggle, "fetch_files", None) or self.kaggle.output
+            fetch(ref, out_dir)
             found = kc.find_result(out_dir)
+
+            if state != "complete":
+                reason = (found["result"] or {}).get("error") if found["result"] else None
+                if found["log"]:
+                    self.log(f"log worker ({Path(found['log']).name}, 12 dòng cuối):")
+                    for line in Path(found["log"]).read_text(encoding="utf-8", errors="replace").splitlines()[-12:]:
+                        self.log("   | " + line[:200])
+                raise kc.KaggleError(f"Kernel kết thúc với trạng thái {state}"
+                                     + (f" — lý do: {reason}" if reason else "")
+                                     + " (mở log trên Kaggle để xem đầy đủ)")
             if not found["video"]:
                 raise kc.KaggleError(f"Không thấy video kết quả trong {out_dir} "
                                      f"(result: {json.dumps(found['result'], ensure_ascii=False)[:200]})")

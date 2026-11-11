@@ -44,7 +44,7 @@ class JobSpec:
     lowvram: bool = True
     output_name: str = ""
     worker_repo: str = "https://github.com/hoannguyen171/UPSCALEVIDEO.git"
-    keep_comfy: bool = True
+    keep_comfy: bool = False   # worker dọn ComfyUI/weight khỏi /kaggle/working (output gọn vài chục MB)
     extra: dict = field(default_factory=dict)
 
     def as_dict(self):
@@ -121,13 +121,19 @@ def read_json(path):
 
 
 class KaggleCli:
-    """Bọc CLI kaggle. ``executable`` có thể là script giả khi test."""
+    """Bọc CLI kaggle. ``executable`` có thể là script giả khi test.
 
-    def __init__(self, executable="kaggle", log=None, env=None, cwd=None):
+    ``use_sdk``: ngoài CLI còn dùng được ``kagglesdk`` (thư viện Kaggle dùng) để **chỉ tải file cần**
+    (log/kết quả) thay vì tải cả output — output của một job ComfyUI có thể tới 1500 file / vài GB.
+    Mặc định bật khi gọi CLI thật, tắt khi dùng CLI giả.
+    """
+
+    def __init__(self, executable="kaggle", log=None, env=None, cwd=None, use_sdk=None):
         self.executable = executable
         self.log = log or (lambda text: None)
         self.env = dict(env or os.environ)
         self.cwd = cwd
+        self.use_sdk = bool(Path(str(executable)).name.lower().startswith("kaggle")) if use_sdk is None else use_sdk
 
     # ------------------------------------------------------------- chạy lệnh
     def _run(self, args, timeout=600, log_output=True):
@@ -225,6 +231,57 @@ class KaggleCli:
         code, output = self._run(["kernels", "output", kernel_ref, "-p", str(out_dir)], timeout=timeout)
         if code != 0:
             raise KaggleError(f"kaggle kernels output thất bại (mã {code}): {output.strip()[-400:]}")
+        return out_dir
+
+    def fetch_files(self, kernel_ref, out_dir, patterns=(".json", ".log", ".mp4"),
+                    skip_prefixes=("ComfyUI/", "valo-upscale-gpu/", "LightX2V/"), timeout=1800):
+        """Chỉ tải những file cần từ output của kernel (fallback: tải cả output bằng CLI).
+
+        Trả đường dẫn thư mục; dùng ``find_result`` để lấy file kết quả.
+        """
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if not self.use_sdk:
+            return self.output(kernel_ref, out_dir, timeout=timeout)
+        try:
+            import urllib.request  # noqa: PLC0415
+
+            from kagglesdk import KaggleClient, KaggleEnv  # noqa: PLC0415
+            from kagglesdk.kernels.types.kernels_api_service import (  # noqa: PLC0415
+                ApiListKernelSessionOutputRequest,
+            )
+        except ImportError:
+            self.log("không có kagglesdk → tải cả output bằng CLI")
+            return self.output(kernel_ref, out_dir, timeout=timeout)
+
+        owner, _, slug = str(kernel_ref).partition("/")
+        client = KaggleClient(env=KaggleEnv.PROD)
+        wanted, page_token, pages = [], None, 0
+        while True:
+            request = ApiListKernelSessionOutputRequest()
+            request.user_name, request.kernel_slug = owner, slug
+            if page_token:
+                request.page_token = page_token
+            response = client.kernels.kernels_api_client.list_kernel_session_output(request)
+            for item in response.files:
+                name = item.file_name or ""
+                if not name.endswith(tuple(patterns)) or name.startswith(tuple(skip_prefixes)):
+                    continue
+                if item.url:
+                    wanted.append((name, item.url))
+            page_token = (response.to_dict() or {}).get("nextPageToken")
+            pages += 1
+            if not page_token or pages > 60:
+                break
+        self.log(f"output có {pages} trang; chỉ tải {len(wanted)} file cần thiết")
+        for name, url in wanted:
+            target = out_dir / Path(name).name
+            try:
+                with urllib.request.urlopen(url, timeout=600) as response, open(target, "wb") as handle:
+                    handle.write(response.read())
+                self.log(f"  ↓ {target.name} ({target.stat().st_size} byte)")
+            except Exception as exc:  # noqa: BLE001 - thiếu file phụ không nên làm hỏng job
+                self.log(f"  ✗ không tải được {name}: {type(exc).__name__}: {exc}")
         return out_dir
 
     def log(self, kernel_ref, out_dir, timeout=600):
