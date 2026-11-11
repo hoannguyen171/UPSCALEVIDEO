@@ -56,6 +56,10 @@ SIDE_FILES = (
     ("kopper/ReCaVSR", "prompt.safetensors", "prompt.safetensors"),
     ("kopper/ReCaVSR", "flashdecoder.safetensors", "flashdecoder.safetensors"),
 )
+# decoder="vae" (bản không-Triton) cần VAE chuẩn của Wan 2.2 trong models/vae — KHÔNG phải vae.safetensors
+# của kopper/ReCaVSR (theo README của node pack).
+VAE_FILE = ("Comfy-Org/Wan_2.2_ComfyUI_Repackaged", "split_files/vae/wan2.2_vae.safetensors", "wan2.2_vae.safetensors")
+
 ENCODERS = ("auto", "hevc nvenc", "h264 nvenc", "h264")
 COLOR_FIXES = ("none", "adain", "wavelet")
 DECODERS = ("flashdecoder", "vae")
@@ -78,8 +82,37 @@ def transformer_name(kind="int8"):
 # ------------------------------------------------------------------ weight
 
 
-def download_weights(models_dir, kind="int8", token=None, source_dir=None, log=None):
-    """Tải transformer (int8/bf16) + prompt + flashdecoder vào ``models/recavsr``."""
+def ensure_vae(comfy_dir, token=None, log=None):
+    """Tải VAE chuẩn Wan 2.2 (Comfy-Org) vào ``models/vae`` cho ``decoder="vae"``."""
+    try:
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
+    except ImportError as exc:  # pragma: no cover
+        raise ComfyError("Thiếu huggingface_hub. Cài: pip install -q huggingface_hub") from exc
+
+    repo_id, remote, name = VAE_FILE
+    target = Path(comfy_dir) / "models" / "vae" / name
+    if target.exists() and target.stat().st_size > 1024:
+        if log:
+            log(f"đã có sẵn: {target}")
+        return str(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if log:
+        log(f"Đang tải {remote} từ {repo_id} (VAE cho decoder='vae') ...")
+    # remote có tiền tố split_files/vae/ → local_dir = <comfy>/models ⇒ file nằm đúng models/vae/<name>
+    downloaded = Path(hf_hub_download(repo_id=repo_id, filename=remote,
+                                      local_dir=str(Path(comfy_dir) / "models"), token=_hf_token(token)))
+    if downloaded != target:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(downloaded), str(target))
+    if not (target.exists() and target.stat().st_size > 1024):
+        raise ComfyError(f"Tải xong nhưng không thấy {target}")
+    if log:
+        log(f"  ✔ {target.name} — {target.stat().st_size / 1048576:.0f} MB")
+    return str(target)
+
+
+def download_weights(models_dir, kind="int8", token=None, source_dir=None, log=None, with_vae=False, comfy_dir=None):
+    """Tải transformer (int8/bf16) + prompt + flashdecoder vào ``models/recavsr`` (+ VAE nếu ``with_vae``)."""
     try:
         from huggingface_hub import hf_hub_download  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover
@@ -123,14 +156,20 @@ def download_weights(models_dir, kind="int8", token=None, source_dir=None, log=N
         if log:
             log(f"  ✔ {target.name} — {target.stat().st_size / 1073741824:.2f} GB")
         paths.append(str(target))
+    if with_vae and comfy_dir:
+        paths.append(ensure_vae(comfy_dir, token=token, log=log))
     return paths
 
 
-def weights_ready(models_dir, kind="int8"):
-    """Đủ transformer + 2 file phụ chưa (kiểm cả dung lượng để tránh file rỗng)."""
+def weights_ready(models_dir, kind="int8", comfy_dir=None, need_vae=False):
+    """Đủ transformer + 2 file phụ (và VAE nếu cần); kiểm cả dung lượng để tránh file rỗng."""
     models_dir = Path(models_dir)
     names = [transformer_name(kind)] + [name for _, _, name in SIDE_FILES]
-    return all((models_dir / name).exists() and (models_dir / name).stat().st_size > 1024 for name in names)
+    ok = all((models_dir / name).exists() and (models_dir / name).stat().st_size > 1024 for name in names)
+    if ok and need_vae and comfy_dir:
+        vae = Path(comfy_dir) / "models" / "vae" / VAE_FILE[2]
+        ok = vae.exists() and vae.stat().st_size > 1024
+    return ok
 
 
 def install_node_commands(comfy_dir, url=NODE_PACK_URL, python=None, with_requirements=True):
@@ -157,7 +196,7 @@ def install_node_commands(comfy_dir, url=NODE_PACK_URL, python=None, with_requir
 
 def build_workflow(video_file, transformer, *, scale=4.0, color_fix="none", seed=42, decoder="flashdecoder",
                    kernels="fast", kv_offload=False, encoder="auto", save_format="auto", save_codec="auto",
-                   filename_prefix="recavsr/video"):
+                   filename_prefix="recavsr/video", vae_file=None):
     """Graph API cho ReCaVSR — đúng cấu trúc ``recavsr_video_4x_api.json`` chính thức.
 
     ``video_file`` là tên file trong thư mục input của ComfyUI.
@@ -184,19 +223,28 @@ def build_workflow(video_file, transformer, *, scale=4.0, color_fix="none", seed
         "kv_offload": bool(kv_offload),
         "encoder": encoder,
     }
-    return {
+    graph = {
         "1": {"class_type": "LoadVideo", "inputs": {"file": video_file}},
         "3": {"class_type": "ReCaVSRLoader", "inputs": {"transformer": transformer}},
         "4": {"class_type": "ReCaVSRUpscale", "inputs": upscale},
         "6": {"class_type": "SaveVideo", "inputs": {"video": ["4", 0], "filename_prefix": filename_prefix,
                                                      "format": save_format, "codec": save_codec}},
     }
+    if decoder == "vae":
+        # node pack: "decoder = vae needs the Wan 2.2 VAE connected"
+        graph["7"] = {"class_type": "VAELoader", "inputs": {"vae_name": vae_file or VAE_FILE[2]}}
+        upscale["vae"] = ["7", 0]
+    return graph
 
 
-def check_ready(base, transformer, log=None):
-    """Kiểm node của pack + file transformer có trong danh sách của ``ReCaVSRLoader``."""
-    state = _check_ready(base, required_nodes=CORE_NODES + RECAVSR_NODES,
-                         extra_combos=(("ReCaVSRLoader", "transformer", transformer),))
+def check_ready(base, transformer, log=None, decoder="flashdecoder", vae_file=None):
+    """Kiểm node của pack + file transformer (và VAE khi dùng ``decoder="vae"``)."""
+    combos = [("ReCaVSRLoader", "transformer", transformer)]
+    nodes = CORE_NODES + RECAVSR_NODES
+    if decoder == "vae":
+        combos.append(("VAELoader", "vae_name", vae_file or VAE_FILE[2]))
+        nodes = nodes + ("VAELoader",)
+    state = _check_ready(base, required_nodes=nodes, extra_combos=tuple(combos))
     if log and not state["ok"]:
         log(f"ReCaVSR chưa sẵn sàng: node thiếu {state['missing_nodes']} | vấn đề {state['problems']}")
     return state
@@ -213,29 +261,60 @@ def upscale_video(input_path, output_path, *, comfy_dir, base="http://127.0.0.1:
     from .comfy_upscale import upscale_video as _comfy_upscale_video  # noqa: PLC0415
 
     name = transformer or transformer_name(precision)
-    state = check_ready(base, name)
-    if not state["ok"]:
-        raise ComfyError("ReCaVSR chưa sẵn sàng: " + "; ".join(state["missing_nodes"] + list(state["problems"].values()))
-                         + f". Cần ComfyUI ≥ 0.44, node pack {NODE_PACK_DIRNAME} trong custom_nodes, "
-                           f"và {name} + prompt.safetensors + flashdecoder.safetensors trong models/recavsr.")
+    # decoder="auto": thử FlashDecoder (nhanh) rồi tự chuyển VAE nếu GPU không chạy được nó.
+    wanted = str(decoder or "flashdecoder").lower()
+    auto_decoder = wanted in ("auto", "")
+    decoder = "flashdecoder" if auto_decoder else wanted
 
-    if progress:
-        progress(2, "preparing", f"ReCaVSR {name} • scale {scale} • kernels {kernels} • encoder {encoder}")
+    def build(decoder_kind):
+        def builder(video_file, model_file, vae_file):
+            return build_workflow(video_file, name, scale=scale, color_fix=color_fix, seed=seed, decoder=decoder_kind,
+                                  kernels=kernels, kv_offload=kv_offload, encoder=encoder, vae_file=vae_file)
+        return builder
 
-    def builder(video_file, model_file, vae_file):
-        return build_workflow(video_file, name, scale=scale, color_fix=color_fix, seed=seed, decoder=decoder,
-                              kernels=kernels, kv_offload=kv_offload, encoder=encoder)
+    def run_once(decoder_kind, note=None):
+        state = check_ready(base, name, decoder=decoder_kind)
+        if not state["ok"]:
+            raise ComfyError("ReCaVSR chưa sẵn sàng: "
+                             + "; ".join(state["missing_nodes"] + list(state["problems"].values()))
+                             + f". Cần ComfyUI ≥ 0.44, node pack {NODE_PACK_DIRNAME} trong custom_nodes, "
+                               f"và {name} + prompt.safetensors + flashdecoder.safetensors trong models/recavsr"
+                               + (f" + {VAE_FILE[2]} trong models/vae (decoder='vae')." if decoder_kind == "vae" else "."))
+        if progress:
+            progress(2, "preparing", f"ReCaVSR {name} • scale {scale:g} • decoder {decoder_kind} • kernels {kernels}"
+                                     f" • encoder {encoder}" + (f" • {note}" if note else ""))
+        combos = [("ReCaVSRLoader", "transformer", name)]
+        nodes = CORE_NODES + RECAVSR_NODES
+        if decoder_kind == "vae":
+            combos.append(("VAELoader", "vae_name", VAE_FILE[2]))
+            nodes = nodes + ("VAELoader",)
+        return _comfy_upscale_video(
+            input_path, output_path, comfy_dir=comfy_dir, base=base, scale=float(scale),
+            model_file=None, vae_file=None, workflow_builder=build(decoder_kind), timeout=timeout, progress=progress,
+            stop_check=stop_check, required_nodes=nodes, extra_combos=tuple(combos),
+            allow_default_weights=False, **kwargs,
+        )
 
     # LƯU Ý: KHÔNG truyền name qua model_file — client chung sẽ kiểm nó trong combo của UNETLoader
     # (models/diffusion_models của RelayVSR) và báo sai. Weight của ReCaVSR nằm trong combo
     # `ReCaVSRLoader.transformer` (models/recavsr), nên kiểm bằng extra_combos.
-    result = _comfy_upscale_video(
-        input_path, output_path, comfy_dir=comfy_dir, base=base, scale=float(scale),
-        model_file=None, vae_file=None, workflow_builder=builder, timeout=timeout, progress=progress,
-        stop_check=stop_check, required_nodes=CORE_NODES + RECAVSR_NODES,
-        extra_combos=(("ReCaVSRLoader", "transformer", name),), allow_default_weights=False, **kwargs,
-    )
+    try:
+        result = run_once(decoder)
+    except ComfyError as exc:
+        # T4 (sm_75) không đủ shared memory cho kernel cửa sổ của FlashDecoder ở scale lớn
+        # ("out of resource: shared memory, Required: 98304, Hardware limit: 65536") → dùng VAE Wan 2.2
+        # (chậm hơn 25–40× phần decode nhưng chạy được và cho nhiều chi tiết hơn).
+        if not (auto_decoder and decoder == "flashdecoder" and "shared memory" in str(exc)
+                and "out of resource" in str(exc)):
+            raise
+        if progress:
+            progress(3, "fallback", "FlashDecoder hết shared memory trên GPU này → chuyển sang VAE Wan 2.2 "
+                                    "(chậm hơn, chi tiết hơn)")
+        ensure_vae(comfy_dir, log=progress and (lambda text: progress(3, "fallback", text)))
+        decoder = "vae"
+        result = run_once(decoder, note="tự chuyển sau lỗi FlashDecoder")
     result["model_file"] = name
+    result["decoder"] = decoder
     result["precision"] = resolve_precision(precision)
     return result
 

@@ -20,7 +20,7 @@ from .tunnel import ensure_cloudflared, platform_asset
 def build_options(args):
     return RunOptions(
         video=Path(args.video), out_dir=Path(args.out), scale=args.scale, precision=args.precision,
-        color_fix=args.color_fix, kernels=args.kernels, encoder=args.encoder, seed=args.seed,
+        color_fix=args.color_fix, kernels=args.kernels, decoder=args.decoder, encoder=args.encoder, seed=args.seed,
         kv_offload=args.kv_offload, lowvram=not args.no_lowvram, output_name=args.output_name or "",
         kernel_slug=args.kernel_slug, work_dir=Path(args.work_dir) if args.work_dir else None,
         kaggle_exe=args.kaggle_exe, wait_interval=args.interval, timeout=args.timeout,
@@ -36,6 +36,8 @@ def main(argv=None):
     parser.add_argument("--precision", default="int8", choices=["int8", "bf16"])
     parser.add_argument("--color-fix", default="none", choices=["none", "adain", "wavelet"])
     parser.add_argument("--kernels", default="fast", choices=["fast", "exact"])
+    parser.add_argument("--decoder", default="auto", choices=["auto", "flashdecoder", "vae"],
+                        help="auto: FlashDecoder, tự chuyển VAE Wan 2.2 khi GPU (T4) không chạy được FlashDecoder")
     parser.add_argument("--encoder", default="auto", choices=["auto", "hevc nvenc", "h264 nvenc", "h264"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--kv-offload", action="store_true")

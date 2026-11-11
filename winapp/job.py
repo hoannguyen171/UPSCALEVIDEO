@@ -40,6 +40,7 @@ class RunOptions:
     precision: str = "int8"
     color_fix: str = "none"
     kernels: str = "fast"
+    decoder: str = "auto"        # auto = FlashDecoder, tự chuyển VAE khi GPU (T4) không chạy được
     encoder: str = "auto"
     seed: int = 42
     kv_offload: bool = False
@@ -58,7 +59,8 @@ class RunOptions:
 
     def worker_job(self, video_url):
         job = kc.JobSpec(video_url=video_url, scale=float(self.scale), precision=self.precision,
-                         color_fix=self.color_fix, kernels=self.kernels, encoder=self.encoder, seed=int(self.seed),
+                         color_fix=self.color_fix, kernels=self.kernels, decoder=self.decoder,
+                         encoder=self.encoder, seed=int(self.seed),
                          kv_offload=bool(self.kv_offload), lowvram=bool(self.lowvram),
                          output_name=self.output_name or f"{Path(self.video).stem}_recavsr_x{self.scale:g}.mp4")
         return job.as_dict()
@@ -133,8 +135,30 @@ class Runner:
         self.kernel_dir = kc.build_kernel_dir(self._work_dir() / "kernel", template, job, kernel_ref,
                                               metadata=kc.kernel_metadata(kernel_ref, is_private=opts.kernel_private))
         self.log(f"Thư mục kernel: {self.kernel_dir} (ref {kernel_ref})")
+
+        vram = self._vram_note()
         return {"video_url": video_url, "job": job, "kernel_ref": kernel_ref, "kernel_dir": str(self.kernel_dir),
-                "tunnel_url": self.tunnel.url if self.tunnel else None}
+                "tunnel_url": self.tunnel.url if self.tunnel else None, **vram}
+
+    def _vram_note(self):
+        """Ước lượng VRAM của T4 cho clip này — cảnh báo SỚM, trước khi tốn ~4 phút cài đặt trên Kaggle."""
+        video = Path(self.options.video)
+        try:
+            from valo_upscale import dims, probe  # noqa: PLC0415  (chỉ cần ở đường video)
+
+            info = probe.get_media_info(video)
+            width, height = int(info.get("width") or 0), int(info.get("height") or 0)
+            if not width or not height:      # không phải video/không đọc được kích thước → bỏ qua
+                return {}
+            note, gb, (out_w, out_h) = dims.vram_warning(width, height, self.options.scale, self.options.precision)
+            self.log(f"Ước lượng VRAM trên T4: ~{gb:g} GB cho {out_w}x{out_h} "
+                     f"({width}x{height} → scale {self.options.scale:g}, {self.options.precision})")
+            if note:
+                self.log("CẢNH BÁO: " + note)
+            return {"vram_gb": gb, "out_size": [out_w, out_h], "input_size": [width, height], "vram_warning": note}
+        except Exception as exc:                     # thiếu ffprobe, file lạ… không được làm chết kế hoạch
+            self.log(f"(bỏ qua ước lượng VRAM: {exc})")
+            return {}
 
     def dry_run(self):
         """Chuẩn bị đầy đủ (kể cả tunnel) nhưng không đẩy kernel — để xem trước.

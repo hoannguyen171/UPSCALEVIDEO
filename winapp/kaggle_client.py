@@ -38,6 +38,7 @@ class JobSpec:
     precision: str = "int8"
     color_fix: str = "none"
     kernels: str = "fast"
+    decoder: str = "auto"
     encoder: str = "auto"
     seed: int = 42
     kv_offload: bool = False

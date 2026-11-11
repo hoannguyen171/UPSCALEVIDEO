@@ -152,6 +152,8 @@ def main(argv=None):
     parser.add_argument("--precision", default=JOB.get("precision", "int8"), choices=["int8", "bf16"])
     parser.add_argument("--color-fix", default=JOB.get("color_fix", "none"), choices=["none", "adain", "wavelet"])
     parser.add_argument("--kernels", default=JOB.get("kernels", "fast"), choices=["fast", "exact"])
+    parser.add_argument("--decoder", default=JOB.get("decoder", "auto"),
+                        choices=["auto", "flashdecoder", "vae"])
     parser.add_argument("--encoder", default=JOB.get("encoder", "auto"))
     parser.add_argument("--seed", type=int, default=int(JOB.get("seed", 42)))
     parser.add_argument("--kv-offload", action="store_true", default=bool(JOB.get("kv_offload", False)))
@@ -201,7 +203,10 @@ def main(argv=None):
 
         models_dir = comfy_dir / "models" / "recavsr"
         recavsr.download_weights(models_dir, args.precision, token=os.environ.get("HF_TOKEN"),
-                                 source_dir="/kaggle/input" if Path("/kaggle/input").is_dir() else None, log=log)
+                                 source_dir="/kaggle/input" if Path("/kaggle/input").is_dir() else None, log=log,
+                                 with_vae=(args.decoder == "vae"), comfy_dir=comfy_dir)
+        if args.decoder == "vae":   # chuẩn bị trước để bước suy luận không phải dừng tải 250 MB
+            recavsr.ensure_vae(comfy_dir, token=os.environ.get("HF_TOKEN"), log=log)
         log("weight:", [p.name for p in models_dir.glob("*.safetensors")])
 
         extra_args = ("--lowvram",) if args.lowvram else ()
@@ -209,7 +214,8 @@ def main(argv=None):
                                      log_path=str(work / "comfy.log"), log=lambda t: None,
                                      env={**os.environ, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
         try:
-            state = recavsr.check_ready(instance.base, recavsr.transformer_name(args.precision))
+            state = recavsr.check_ready(instance.base, recavsr.transformer_name(args.precision),
+                                        decoder="vae" if args.decoder == "vae" else "flashdecoder")
             log("check_ready:", state)
             if not state["ok"]:
                 raise RuntimeError(f"ReCaVSR chưa sẵn sàng: {state}")
@@ -218,7 +224,7 @@ def main(argv=None):
             out_path = work / out_name
             result = recavsr.upscale_video(
                 video, out_path, comfy_dir=str(comfy_dir), base=instance.base, scale=args.scale,
-                precision=args.precision, color_fix=args.color_fix, kernels=args.kernels,
+                precision=args.precision, color_fix=args.color_fix, kernels=args.kernels, decoder=args.decoder,
                 encoder=args.encoder, seed=args.seed, kv_offload=args.kv_offload, timeout=10800,
                 progress=lambda percent, stage, text: log(f"  [{percent:3d}%] {stage}: {text}"),
             )
@@ -235,6 +241,7 @@ def main(argv=None):
                 "precision": args.precision,
                 "scale": args.scale,
                 "kernels": args.kernels,
+                "decoder": result.get("decoder", args.decoder),
             }
             log("KẾT QUẢ:", json.dumps(summary, ensure_ascii=False))
         finally:

@@ -21,6 +21,7 @@ SCALES = ("4", "2", "1.5", "3")
 PRECISIONS = ("int8", "bf16")
 COLOR_FIXES = ("none", "adain", "wavelet")
 KERNELS = ("fast", "exact")
+DECODERS = ("auto", "flashdecoder", "vae")
 ENCODERS = ("auto", "hevc nvenc", "h264 nvenc", "h264")
 
 
@@ -62,6 +63,7 @@ class App(Tk):
         self.precision_var = StringVar(value="int8")
         self.color_var = StringVar(value="none")
         self.kernels_var = StringVar(value="fast")
+        self.decoder_var = StringVar(value="auto")
         self.encoder_var = StringVar(value="auto")
         self.seed_var = StringVar(value="42")
         self.kv_var = BooleanVar(value=False)
@@ -77,6 +79,7 @@ class App(Tk):
         combo(0, 4, "Sửa màu", self.color_var, COLOR_FIXES)
         combo(1, 0, "Kernel", self.kernels_var, KERNELS)
         combo(1, 2, "Encoder", self.encoder_var, ENCODERS)
+        combo(2, 4, "Decoder", self.decoder_var, DECODERS)
         ttk.Label(grid, text="Seed").grid(row=1, column=4, sticky="w", padx=4)
         ttk.Entry(grid, textvariable=self.seed_var, width=16).grid(row=1, column=5, sticky="w", padx=4)
         ttk.Checkbutton(grid, text="kv_offload (ít VRAM hơn)", variable=self.kv_var) \
@@ -175,7 +178,8 @@ class App(Tk):
             return None
         return RunOptions(video=video, out_dir=Path(self.out_var.get().strip() or "ket_qua"), scale=scale,
                           precision=self.precision_var.get(), color_fix=self.color_var.get(),
-                          kernels=self.kernels_var.get(), encoder=self.encoder_var.get(), seed=seed,
+                          kernels=self.kernels_var.get(), decoder=self.decoder_var.get(),
+                          encoder=self.encoder_var.get(), seed=seed,
                           kv_offload=self.kv_var.get(), lowvram=self.lowvram_var.get(),
                           work_dir=video.parent / "valo_job")
 
@@ -237,7 +241,7 @@ class App(Tk):
         self._set_running(True)
         self.log("=" * 70)
         self.log(f"{'XEM TRƯỚC' if dry_run else 'BẮT ĐẦU'}: {options.video.name} • scale {options.scale:g} • "
-                 f"{options.precision} • {options.kernels}")
+                 f"{options.precision} • {options.kernels} • decoder {options.decoder}")
 
         def work():
             runner = Runner(options, log=self.log, on_state=lambda s, d=None: self.queue.put(("state", (s, d))))
@@ -276,7 +280,7 @@ class App(Tk):
                 result = recavsr.upscale_video(
                     str(options.video), str(out), comfy_dir=str(Path(base).parent), base=base,
                     scale=options.scale, precision=options.precision, color_fix=options.color_fix,
-                    kernels=options.kernels, encoder=options.encoder, seed=options.seed,
+                    kernels=options.kernels, decoder=options.decoder, encoder=options.encoder, seed=options.seed,
                     kv_offload=options.kv_offload,
                     progress=lambda percent, stage, text: self.log(f"[{percent:3d}%] {text}"))
                 self.queue.put(("done", {"ok": True, "video": result["output_path"], "local": True}))

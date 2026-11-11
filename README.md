@@ -703,6 +703,29 @@ python -m winapp.cli --video clip.mp4 --dry-run --json      # xem trước, khô
 VRAM tham chiếu của tác giả (int8 + FlashDecoder, fast kernels): **~11,6 GB ở 1440×1440** (vừa T4),
 **~21 GB ở 3840×1920** (không vừa T4 → node tự hạ cấu hình hoặc báo lỗi nêu rõ scale lớn nhất chạy được).
 
+App có **ước lượng VRAM trước khi chạy** (`estimate_recavsr_vram_gb`, khớp đúng 2 điểm tham chiếu của tác giả)
+và in cảnh báo ngay trong kế hoạch dry-run, ví dụ: `1920x1080 scale 4 int8 → 3840x2160 ~22,2 GB > 16 GB
+→ Nên dùng --scale 1 (~11,6 GB)`. Tránh việc đợi ~4 phút cài đặt trên Kaggle rồi mới biết là hết VRAM.
+
+### ⚠️ FlashDecoder trên T4 (sm_75) — dùng `--decoder vae` cho 4×
+
+Node pack ghi rõ: *"the decoder's window kernel needs compute capability 8.0 (RTX 30 series or newer)"*.
+T4 là **sm_75** nên kernel cửa sổ của FlashDecoder vượt **shared memory** 64 KB của card khi ảnh ra lớn:
+
+```
+ComfyUI lỗi ở node ReCaVSRUpscale: out of resource: shared memory, Required: 98304,
+Hardware limit: 65536. (triton.runtime.errors.OutOfResources)
+```
+
+Số đo thật: **2× thì FlashDecoder vừa** (chạy tốt), **4× thì vượt** → chết ở node `ReCaVSRUpscale`.
+
+Cách xử lý (app tự làm sẵn): mặc định `--decoder auto` = thử FlashDecoder, gặp đúng lỗi shared memory thì
+**tự tải VAE chuẩn Wan 2.2 và chạy lại bằng `decoder=vae`** (node pack: `vae` dùng
+`wan2.2_vae.safetensors` của Comfy-Org trong `models/vae`, không phải vae của kopper). Đánh đổi của VAE:
+decode **chậm hơn 25–40×** nhưng **nhiều chi tiết hơn** (+23% năng lượng cạnh trên chân dung, +8% trên phố mưa
+theo tác giả) và cần cả video trong bộ nhớ (ComfyUI tự chuyển sang decode theo tile nếu thiếu VRAM).
+Chỉ định tay: `--decoder flashdecoder | vae | auto`.
+
 ### Đã kiểm chứng (máy dev, 62 checks)
 
 | Hạng mục | Kết quả |
