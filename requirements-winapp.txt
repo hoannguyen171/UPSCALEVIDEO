@@ -1,0 +1,5 @@
+# Ứng dụng Windows (winapp) cần CLI kaggle để đẩy job lên GPU Kaggle.
+#   pip install -r requirements-winapp.txt
+# Sau đó tải API token: Kaggle → Account → Create New API Token → đặt vào
+#   Windows: %USERPROFILE%\.kaggle\kaggle.json
+kaggle>=1.6

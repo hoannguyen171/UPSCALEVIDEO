@@ -144,19 +144,52 @@ def object_info(base=DEFAULT_SERVER):
     return _request(base, "/object_info", timeout=60)
 
 
-def check_ready(base=DEFAULT_SERVER, model_file=None, vae_file=None):
-    """Trả dict: node nào thiếu + model/VAE nào chưa có trong ComfyUI."""
+def _combo_options(info, node, input_name):
+    """Danh sách giá trị combo của 1 input (rỗng nếu node/input không tồn tại).
+
+    ComfyUI trả 2 kiểu: kiểu cũ ``[[giá trị...], {meta}]`` và kiểu schema V3
+    ``["COMBO", {"options": [...]}]`` — phải đọc được cả hai, nếu không thì node dùng schema V3
+    (như ReCaVSR) sẽ bị báo "chưa có file" dù file có thật.
+    """
+    node_info = info.get(node, {})
+    spec = node_info.get("input", {}).get("required", {}).get(input_name)
+    if spec is None:
+        spec = node_info.get("input", {}).get("optional", {}).get(input_name)
+    if isinstance(spec, dict):
+        options = spec.get("options")
+        return options if isinstance(options, list) else []
+    if isinstance(spec, list) and spec:
+        first = spec[0]
+        if isinstance(first, list):
+            return first
+        if isinstance(first, str) and first.upper() == "COMBO" and len(spec) > 1 and isinstance(spec[1], dict):
+            options = spec[1].get("options")
+            return options if isinstance(options, list) else []
+    return []
+
+
+def check_ready(base=DEFAULT_SERVER, model_file=None, vae_file=None, required_nodes=None, extra_combos=None):
+    """Trả dict: node nào thiếu + model/VAE nào chưa có trong ComfyUI.
+
+    ``required_nodes`` cho phép đổi bộ node cần có (ví dụ ReCaVSR không cần node của RelayVSR).
+    ``extra_combos`` kiểm thêm cặp (node, input, giá trị) — ví dụ ("ReCaVSRLoader", "transformer", "x.safetensors").
+    """
     info = object_info(base)
-    missing_nodes = [name for name in REQUIRED_NODES if name not in info]
+    nodes = tuple(required_nodes) if required_nodes is not None else REQUIRED_NODES
+    missing_nodes = [name for name in nodes if name not in info]
     problems = {}
     if model_file:
-        options = info.get("UNETLoader", {}).get("input", {}).get("required", {}).get("unet_name", [[]])[0]
-        if model_file not in options:
+        if model_file not in _combo_options(info, "UNETLoader", "unet_name"):
             problems["model"] = f"{model_file} chưa có trong models/diffusion_models"
     if vae_file:
-        options = info.get("VAELoader", {}).get("input", {}).get("required", {}).get("vae_name", [[]])[0]
-        if vae_file not in options:
+        if vae_file not in _combo_options(info, "VAELoader", "vae_name"):
             problems["vae"] = f"{vae_file} chưa có trong models/vae"
+    for node, input_name, value in (extra_combos or ()):
+        if node not in info:
+            missing_nodes.append(node)
+            continue
+        if value not in _combo_options(info, node, input_name):
+            problems[f"{node}.{input_name}"] = f"{value} chưa có trong danh sách của {node}.{input_name}"
     return {"ok": not missing_nodes and not problems, "missing_nodes": missing_nodes, "problems": problems}
 
 
@@ -380,6 +413,7 @@ def upscale_video(
     workflow_builder=None,
     input_dir=None,
     output_dir=None,
+    required_nodes=None,
 ):
     """Upscale 1 video qua RelayVSR trong ComfyUI; trả dict kết quả.
 
@@ -391,7 +425,7 @@ def upscale_video(
         model_file = model_file or default_model
         vae_file = vae_file or default_vae
 
-    ready = check_ready(base, model_file, vae_file)
+    ready = check_ready(base, model_file, vae_file, required_nodes=required_nodes)
     if not ready["ok"]:
         raise ComfyError(
             "ComfyUI chưa sẵn sàng: "
@@ -430,7 +464,7 @@ def upscale_video(
 
     info = probe.get_media_info(output_path)
     src_info = probe.get_media_info(input_path)
-    expected = tuple(dim * scale for dim in (src_info["width"], src_info["height"]))
+    expected = tuple(round(dim * scale) for dim in (src_info["width"], src_info["height"]))
     return {
         "output_path": str(output_path),
         "scale": scale,

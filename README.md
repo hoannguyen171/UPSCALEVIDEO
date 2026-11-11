@@ -599,3 +599,85 @@ Link tham khảo: [model card gốc](https://huggingface.co/kopper/RelayVSR) ·
 [RelayVSR X2 của LightX2V](https://huggingface.co/lightx2v/RelayVSR_X2) ·
 [hướng dẫn LightX2V](https://github.com/ModelTC/LightX2V/tree/main/scripts/relayvsr) ·
 [wiki ComfyUI về RelayVSR X2](https://comfyui-wiki.com/en/news/2026-10-29-relayvsr-x2)
+
+---
+
+## 13. Ứng dụng Windows + GPU Kaggle — ReCaVSR **int8** (4× video)
+
+Model: [ReCaVSR](https://github.com/kopperx/ReCaVSR) (USTC) — one-step streaming video super-resolution trên
+Wan2.2 TI2V-5B, chạy qua node pack [PedroMarinhoDev/ComfyUI-ReCaVSR](https://github.com/PedroMarinhoDev/ComfyUI-ReCaVSR).
+Dùng bản **int8 ConvRot (6,27 GB, nhanh ~1,8× so với bf16, nhẹ VRAM hơn ~4 GB)** — int8 cần GPU compute
+capability ≥ 7.5, **T4 của Kaggle đúng ngưỡng**.
+
+Ứng dụng chạy trên Windows, GPU thì mượn của Kaggle:
+
+```mermaid
+graph LR
+  A[App Windows<br/>Tkinter] -->|1. mở HTTP server + tunnel tạm| T[cloudflared quick tunnel]
+  T -->|2. URL công khai của video| K[Kernel Kaggle<br/>GPU T4]
+  K -->|3. ComfyUI + ReCaVSR int8| K
+  A -->|4. kaggle kernels push/status| K
+  K -->|5. kaggle kernels output| A
+```
+
+Kaggle **không** cho kết nối vào notebook, nên chiều đưa video đi dùng tunnel tạm (cloudflared, app tự tải ~53 MB,
+không cần tài khoản); chiều lấy kết quả về dùng API chính thức `kaggle kernels output`.
+
+### Cài & dùng
+
+```bash
+pip install -r requirements-winapp.txt          # chỉ cần CLI kaggle
+# Kaggle → Account → Create New API Token → %USERPROFILE%\.kaggle\kaggle.json
+python -m winapp.cli --check                    # kiểm CLI + credentials
+python -m winapp.cli --tunnel-test              # tự kiểm tunnel thật (tải cloudflared + thử /health + tải thử file)
+python run_win.py                               # mở ứng dụng
+```
+
+Trong app: chọn video → chọn thư mục kết quả → *Xem trước (dry-run)* để xem kế hoạch → **BẮT ĐẦU (GPU Kaggle)**.
+Nhật ký chạy ngay trong cửa sổ; xong có nút mở video/thư mục kết quả. Hoặc dùng dòng lệnh:
+
+```bash
+python -m winapp.cli --video clip.mp4 --out ket_qua --scale 4 --precision int8 --color-fix none
+python -m winapp.cli --video clip.mp4 --dry-run --json      # xem trước, không đẩy kernel
+```
+
+| File | Việc |
+|---|---|
+| `run_win.py`, `winapp/app.py` | giao diện Tkinter (thuần thư viện chuẩn Python) |
+| `winapp/job.py` | ghép job: share → tunnel → push → đợi → tải kết quả → dọn dẹp |
+| `winapp/kaggle_client.py` | bọc CLI `kaggle`; dựng thư mục kernel + chèn tham số vào worker |
+| `winapp/share.py`, `winapp/tunnel.py` | HTTP server 1 file (có token) + cloudflared quick tunnel |
+| `winapp/cli.py` | chạy không GUI: `--check`, `--tunnel-test`, `--dry-run`, chạy thật |
+| `kaggle_jobs/recavsr_worker.py` | script chạy **trên Kaggle**: ComfyUI + node pack + weight + upscale |
+| `valo_upscale/recavsr.py` | module dùng chung: tải weight int8/bf16, dựng workflow, gọi ComfyUI |
+| `recavsr_kaggle.ipynb` | chạy tay trên Kaggle (cùng worker, không cần app) |
+
+### Tham số (mặc định đã tốt cho T4)
+
+| Tham số | Mặc định | Ghi chú |
+|---|---|---|
+| `--scale` | `4` | model huấn luyện ở 4×; T4 16 GB nên dùng `2` nếu input ≥ 640×360 |
+| `--precision` | `int8` | 6,27 GB; `bf16` là bản gốc 10,6 GB |
+| `--kernels` | `fast` | `exact` = đúng tham chiếu, chậm hơn |
+| `--color-fix` | `none` | `adain` / `wavelet` để khớp màu với video gốc |
+| `--encoder` | `auto` | `auto` → HEVC NVENC → H.264 NVENC → x264; chọn `h264` nếu cần tương thích tối đa |
+| `--kv-offload` | tắt | bật khi output không đủ VRAM (kết quả y hệt) |
+| `--no-lowvram` | (đang bật lowvram) | tắt nếu VRAM thoải mái |
+
+VRAM tham chiếu của tác giả (int8 + FlashDecoder, fast kernels): **~11,6 GB ở 1440×1440** (vừa T4),
+**~21 GB ở 3840×1920** (không vừa T4 → node tự hạ cấu hình hoặc báo lỗi nêu rõ scale lớn nhất chạy được).
+
+### Đã kiểm chứng (máy dev, 62 checks)
+
+| Hạng mục | Kết quả |
+|---|---|
+| Node pack thật trong ComfyUI 0.44 | ComfyUI nạp được `ReCaVSRLoader` + `ReCaVSRUpscale`, input khớp graph; workflow dựng bằng code **trùng file API chính thức** và **VALID** (lỗi chỉ ở khâu nạp weight giả) |
+| Đọc combo của schema V3 | sửa `_combo_options` để đọc `["COMBO", {"options": […]}]` — nếu không, worker sẽ báo thiếu weight dù có đủ |
+| Weight | đúng repo/đúng tên file (`PedroMarinhoDev/ReCaVSR-ComfyUI` int8 + `kopper/ReCaVSR` prompt/flashdecoder), **3/3 file có thật trên Hub**, có token, dùng lại bản sẵn có (symlink) |
+| Ứng dụng Windows (27 checks) | chèn tham số vào worker rồi **compile được**; metadata kernel đúng (GPU/internet/script); client Kaggle: push → status (`queued→running→complete`) → output → copy kết quả; HTTP server 1 file (200/401/HEAD/health); parser URL tunnel; `Runner.run()` chạy trọn đường ống với CLI kaggle **giả**; dry-run **không** đẩy kernel và **vẫn dọn** tunnel |
+| Tunnel thật | tải `cloudflared.exe` (53 MB), mở quick tunnel, `/health` OK qua URL công khai và **tải được file qua URL đó** (`payload_ok: true`) |
+| Suy luận ReCaVSR | **chưa kiểm chứng** — cần GPU NVIDIA (máy dev không có) |
+
+Ngoài ra khi viết code đã bắt được 2 lỗi thật: node pack **không import được nếu thiếu `triton`**
+(`flashdecoder.py` import `tl`) → worker cài triton **bắt buộc**; và HTTP reason phrase tiếng Việt làm
+`send_error` ném `UnicodeEncodeError` (HTTP chỉ nhận latin-1) → đã đổi sang tiếng Anh.
