@@ -25,3 +25,9 @@ valo_self_test.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Thư mục chạy của app (chứa cloudflared.exe 55 MB, không được commit)
+valo_job/
+**/valo_job/
+bin/cloudflared*
+cloudflared.exe
