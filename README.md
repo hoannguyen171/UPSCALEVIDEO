@@ -751,10 +751,10 @@ Hardware limit: 65536. (triton.runtime.errors.OutOfResources)
 
 Số đo thật: **2× thì FlashDecoder vừa** (chạy tốt), **4× thì vượt** → chết ở node `ReCaVSRUpscale`.
 
-**Bằng chứng từ 2 lần chạy thật**: ở 4× thì lỗi này **không phải của FlashDecoder** — đổi sang `decoder=vae`
+**Bằng chứng từ các lần chạy thật**: ở 4× thì lỗi này **không phải của FlashDecoder** — đổi sang `decoder=vae`
 (app đã tự tải VAE 1,34 GB và chạy lại) **vẫn cùng lỗi y hệt**, vì kernel Triton đó nằm ở đường **attention của
 `kernels=fast`** mà cả hai decoder đều dùng (`Required: 98304 …` giống nhau). Đòn đúng là **`--kernels exact`**
-(chuỗi op của bản tham chiếu, không Triton).
+(chuỗi op của bản tham chiếu, không Triton) — và **đã kiểm chứng**: 4× chỉ chạy được khi qua `exact` (265 s).
 
 Vì vậy app tự đi **thang thử** khi gặp đúng lỗi shared memory (chỉ khi bạn để `--decoder auto`):
 
@@ -781,7 +781,8 @@ Chỉ định tay: `--kernels fast | exact` và `--decoder flashdecoder | vae | 
 | Tốc độ đường truyền video | đo thật với file 50 MB qua URL công khai của tunnel: **12,1 MB/s** (4,1 s) → video 200 MB ≈ **20 s**; video lớn không phải là điểm nghẽn |
 | Kaggle thật — đăng nhập | `kaggle.json` (username + key) → `kaggle config view` + `kaggle kernels list -m` trả về kernel thật của tài khoản |
 | Kaggle thật — push→chạy→tải kết quả | kernel CPU `hoanghoannguyen1223/valo-smoke`: push OK, trạng thái `RUNNING → COMPLETE`, tải về `valo_result.json` + file sinh ra trên Kaggle (`hello from kaggle …`) |
-| Kaggle thật — job ReCaVSR int8 (GPU T4) | **chạy trọn đường ống, có kết quả**: clip 320×180/24 frame → **640×360, 24 frame, 12 fps, còn nguyên audio**; suy luận 36,8 s, cả job 163,8 s (kể cả tải 6,27 GB weight + cài ComfyUI). App tải về `sample_clip_recavsr_x2.mp4` (281 KB) |
+| Kaggle thật — job ReCaVSR int8 **2×** (GPU T4) | **chạy trọn đường ống, có kết quả**: clip 320×180/24 frame → **640×360, 24 frame, 12 fps, còn nguyên audio**; suy luận 36,8 s, cả job 163,8 s (kể cả tải 6,27 GB weight + cài ComfyUI). App tải về `sample_clip_recavsr_x2.mp4` (281 KB) |
+| Kaggle thật — job ReCaVSR int8 **4×** (GPU T4) | **chạy được nhờ thang thử**: `kernels=fast` hỏng ở node `ReCaVSRUpscale` (`out of resource: shared memory, Required: 98304, Hardware limit: 65536`), app **tự chuyển `kernels=exact`** rồi chạy xong → **1280×720, 24 frame, 12 fps, còn nguyên audio**; suy luận **265,3 s** (≈11 s/frame), cả job 409,2 s. Log ghi rõ: `fallback: Triton hết shared memory ở bước này (decoder flashdecoder, kernels fast) → thử tiếp: … kernels exact` |
 | Audio sau upscale | giữ nguyên nội dung (**tương quan phổ 0,9997** với bản gốc), mức âm lượng không đổi (−21,1 → −21,2 dB), chỉ dài thêm 23 ms |
 | Đo độ lệch A/V của bộ ghi node pack | tách riêng ra đo bằng clip có **transient** (`samples/sync_click.mp4`: ô trắng nhấp nháy + bíp 1 kHz cùng ở 1,000 s): bộ ghi của node pack lệch **+23 ms** — đúng bằng độ trễ mồi của AAC (1024 mẫu / 44,1 kHz) nên không đáng kể. ⚠️ Trước đó tôi đo nhầm −230 ms vì dùng **tương quan trên sine 440 Hz** (tuần hoàn → đỉnh không xác định) — số đó **không** đúng |
 | Chất lượng so với Lanczos | lệch trung bình 8,86/255 và **bị biến dạng chữ timecode + nhoè ô vuông nhỏ** trên pattern tổng hợp — đúng hành vi của model phục hồi sinh tạo với nội dung 1-pixel (không phải ảnh thật), không phải lỗi pipeline. Màu/khung hình vẫn đúng |
