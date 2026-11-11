@@ -64,7 +64,25 @@ def pip_install(*packages, optional=False):
     return code == 0
 
 
-def fetch_video(url, dest_dir, name=None):
+def fetch_video(url, dest_dir, name=None, attempts=3, delay=20):
+    """Tải video từ URL công khai (app Windows chia sẻ qua tunnel) — thử lại vài lần.
+
+    Gọi **trước** khi cài ComfyUI/tải weight: tunnel của app chỉ mở trong lúc job chạy, tải sớm
+    thì không phụ thuộc việc cài đặt mất bao lâu.
+    """
+    last = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return _fetch_video_once(url, dest_dir, name)
+        except Exception as exc:  # noqa: BLE001 - thử lại rồi mới báo
+            last = exc
+            log(f"tải video lần {attempt}/{attempts} lỗi: {type(exc).__name__}: {exc}")
+            if attempt < attempts:
+                time.sleep(delay)
+    raise RuntimeError(f"Không tải được video từ URL chia sẻ sau {attempts} lần: {last}")
+
+
+def _fetch_video_once(url, dest_dir, name=None):
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     name = name or Path(urllib.parse.urlparse(url).path).name or "input.mp4"
@@ -162,16 +180,9 @@ def main(argv=None):
         from valo_upscale import recavsr  # noqa: PLC0415
         from valo_upscale import comfy_upscale as cu  # noqa: PLC0415
 
-        comfy_dir, node_dir = prepare_comfy(work / "ComfyUI", work / "logs")
-        log("ComfyUI:", comfy_dir, "| node pack:", node_dir)
-
-        models_dir = comfy_dir / "models" / "recavsr"
-        recavsr.download_weights(models_dir, args.precision, token=os.environ.get("HF_TOKEN"),
-                                 source_dir="/kaggle/input" if Path("/kaggle/input").is_dir() else None, log=log)
-        log("weight:", [p.name for p in models_dir.glob("*.safetensors")])
-
+        # 1) lấy video TRƯỚC (rẻ, và tunnel của app chỉ mở trong lúc job chạy)
         if args.video_url:
-            video = fetch_video(args.video_url, comfy_dir / "input")
+            video = fetch_video(args.video_url, work / "input")
         elif args.video:
             video = Path(args.video)
             if not video.exists():
@@ -182,6 +193,15 @@ def main(argv=None):
                 raise FileNotFoundError("Không có --video-url/--video và /kaggle/input cũng không có .mp4")
             video = found[0]
             log("dùng video đầu tiên trong /kaggle/input:", video)
+
+        # 2) cài ComfyUI + node pack (chậm), rồi tải weight
+        comfy_dir, node_dir = prepare_comfy(work / "ComfyUI", work / "logs")
+        log("ComfyUI:", comfy_dir, "| node pack:", node_dir)
+
+        models_dir = comfy_dir / "models" / "recavsr"
+        recavsr.download_weights(models_dir, args.precision, token=os.environ.get("HF_TOKEN"),
+                                 source_dir="/kaggle/input" if Path("/kaggle/input").is_dir() else None, log=log)
+        log("weight:", [p.name for p in models_dir.glob("*.safetensors")])
 
         extra_args = ("--lowvram",) if args.lowvram else ()
         instance = cu.start_instance(comfy_dir, port=8188, extra_args=extra_args,
