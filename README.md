@@ -635,13 +635,23 @@ không cần tài khoản); chiều lấy kết quả về dùng API chính th�
 đọc worker trong repo (`winapp/job.py::worker_template_path`).
 
 `build_exe.cmd` cài `pyinstaller`, nhúng luôn `kaggle_jobs/recavsr_worker.py` vào gói và tạo **một file duy nhất**
-`dist\ValoUpscale.exe` — bản gọn **~9,2 MB**, build ~20 s (đã loại numpy/PIL/torch để exe nhẹ và tránh lỗi đệ quy
-khi đóng gói). Vì vậy 2 nút *Kiểm tra ComfyUI ở máy* và *Chạy local* trong bản exe sẽ báo cần chạy từ mã nguồn;
+`dist\ValoUpscale.exe` — **~13 MB**, build ~30 s (đã loại numpy/PIL/torch để exe nhẹ và tránh lỗi đệ quy
+khi đóng gói; `kagglesdk` thì **có** nhúng sẵn để app chỉ tải file json/log/mp4 thay vì cả cây output). Vì vậy 2 nút *Kiểm tra ComfyUI ở máy* và *Chạy local* trong bản exe sẽ báo cần chạy từ mã nguồn;
 muốn có cả 2 nút đó thì chạy `python run_win.py` (máy đã có sẵn numpy/PIL) — toàn bộ đường **GPU Kaggle vẫn đầy đủ trong exe**. Bản exe không có console;
 muốn tự kiểm bản đóng gói thì chạy `dist\ValoUpscale.exe --self-test` — nó ghi `valo_self_test.json` cạnh file exe
 (đường dẫn worker nhúng, phiên bản tkinter, trạng thái `frozen`). Chạy từ mã nguồn thì `python run_win.py --self-test`
 in thẳng ra màn hình. Kết quả thật của `dist\ValoUpscale.exe --self-test`: `frozen: true`, worker nhúng ở
-`…\_MEIxxxx\kaggle_jobs\recavsr_worker.py`, `worker_template_exists: true`.
+`…\_MEIxxxx\kaggle_jobs\recavsr_worker.py`, `worker_template_exists: true`, `kagglesdk: true`, và đường dẫn `kaggle` CLI.
+
+Muốn kiểm **worker trong exe có khớp repo không** (ví dụ sau khi sửa worker mà quên build lại):
+
+```bash
+dist\ValoUpscale.exe --dump-worker worker_tu_exe.py
+python -c "import hashlib,pathlib as p; print(hashlib.sha256(p.Path('kaggle_jobs/recavsr_worker.py').read_bytes()).hexdigest())"
+python -c "import hashlib,pathlib as p; print(hashlib.sha256(p.Path('worker_tu_exe.py').read_bytes()).hexdigest())"
+```
+
+Hai mã sha256 phải giống nhau (đã kiểm thật: `ddf9704bed384ac2…`, 13 154 byte).
 
 ### Cài & dùng
 
@@ -654,6 +664,10 @@ python run_win.py                               # mở ứng dụng
 ```
 
 Trong app: chọn video → chọn thư mục kết quả → *Xem trước (dry-run)* để xem kế hoạch → **BẮT ĐẦU (GPU Kaggle)**.
+
+Ước lượng thời gian (số đo thật trên T4, int8, fast kernels, clip 320×180): **≈1,5 s cho mỗi frame ở mức 2×**;
+mức 4× nặng hơn ~4 lần diện tích nên tính ~4–6 s/frame. Cộng thêm **~2,5–4 phút cố định mỗi job** (cài ComfyUI +
+tải 6,27 GB weight + khởi động) — chạy clip dài một lần rẻ hơn nhiều lần chạy clip ngắn.
 Nhật ký chạy ngay trong cửa sổ; xong có nút mở video/thư mục kết quả. Hoặc dùng dòng lệnh:
 
 ```bash
