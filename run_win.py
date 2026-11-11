@@ -19,6 +19,14 @@ def self_test():
     from winapp import job as jobmod
     from winapp.tunnel import platform_asset
 
+    import shutil
+
+    try:
+        import kagglesdk  # noqa: F401
+
+        sdk = True
+    except ImportError:
+        sdk = False
     report = {
         "python": sys.version.split()[0],
         "tkinter": tkinter.TkVersion,
@@ -26,6 +34,8 @@ def self_test():
         "worker_template": str(jobmod.worker_template_path()),
         "worker_template_exists": jobmod.worker_template_path().is_file(),
         "cloudflared_asset": platform_asset()[0],
+        "kagglesdk": sdk,                       # dùng để chỉ tải file log/kết quả thay vì cả output
+        "kaggle_cli": shutil.which("kaggle"),   # cần cho push/status/output
         "cwd": str(Path.cwd()),
     }
     text = json.dumps(report, ensure_ascii=False, indent=2)
