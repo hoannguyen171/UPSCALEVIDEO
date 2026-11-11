@@ -731,12 +731,23 @@ Hardware limit: 65536. (triton.runtime.errors.OutOfResources)
 
 Số đo thật: **2× thì FlashDecoder vừa** (chạy tốt), **4× thì vượt** → chết ở node `ReCaVSRUpscale`.
 
-Cách xử lý (app tự làm sẵn): mặc định `--decoder auto` = thử FlashDecoder, gặp đúng lỗi shared memory thì
-**tự tải VAE chuẩn Wan 2.2 và chạy lại bằng `decoder=vae`** (node pack: `vae` dùng
-`wan2.2_vae.safetensors` của Comfy-Org trong `models/vae`, không phải vae của kopper). Đánh đổi của VAE:
-decode **chậm hơn 25–40×** nhưng **nhiều chi tiết hơn** (+23% năng lượng cạnh trên chân dung, +8% trên phố mưa
-theo tác giả) và cần cả video trong bộ nhớ (ComfyUI tự chuyển sang decode theo tile nếu thiếu VRAM).
-Chỉ định tay: `--decoder flashdecoder | vae | auto`.
+**Bằng chứng từ 2 lần chạy thật**: ở 4× thì lỗi này **không phải của FlashDecoder** — đổi sang `decoder=vae`
+(app đã tự tải VAE 1,34 GB và chạy lại) **vẫn cùng lỗi y hệt**, vì kernel Triton đó nằm ở đường **attention của
+`kernels=fast`** mà cả hai decoder đều dùng (`Required: 98304 …` giống nhau). Đòn đúng là **`--kernels exact`**
+(chuỗi op của bản tham chiếu, không Triton).
+
+Vì vậy app tự đi **thang thử** khi gặp đúng lỗi shared memory (chỉ khi bạn để `--decoder auto`):
+
+| Bước | decoder | kernels | Ghi chú |
+|---|---|---|---|
+| 1 | flashdecoder | `fast` (như bạn chọn) | nhanh nhất |
+| 2 | flashdecoder | `exact` | khi bước 1 gặp lỗi shared memory — không cần tải gì thêm |
+| 3 | vae | `exact` | tự tải `wan2.2_vae.safetensors` (1,34 GB) của Comfy-Org vào `models/vae`; chậm hơn 25–40× phần decode nhưng nhiều chi tiết hơn |
+
+Lỗi khác (không phải shared memory) thì **không thử lại** — ném nguyên lỗi để bạn thấy đúng nguyên nhân.
+Nếu bạn chỉ định rõ `--decoder flashdecoder` thì thang chỉ có bước 1–2 (không tự đổi sang VAE).
+
+Chỉ định tay: `--kernels fast | exact` và `--decoder flashdecoder | vae | auto`.
 
 ### Đã kiểm chứng (máy dev, 62 checks)
 

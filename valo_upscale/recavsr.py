@@ -265,14 +265,30 @@ def upscale_video(input_path, output_path, *, comfy_dir, base="http://127.0.0.1:
     wanted = str(decoder or "flashdecoder").lower()
     auto_decoder = wanted in ("auto", "")
     decoder = "flashdecoder" if auto_decoder else wanted
+    given_kernels = kernels
+
+    def attempts():
+        """Thang thử khi gặp lỗi *shared memory* của Triton (T4 = sm_75, 64 KB/khối).
+
+        Nguyên nhân là kernel Triton nên nó phụ thuộc cả ``kernels`` lẫn kích thước ảnh ra:
+        ``fast`` dùng kernel fused/attention tiles của comfy-kitchen → cần nhiều shared memory;
+        ``exact`` chạy đúng chuỗi op của bản tham chiếu (không Triton) → chạy được.
+        """
+        first = (decoder, given_kernels, None)
+        rest = []
+        if given_kernels == "fast":
+            rest.append((decoder, "exact", "kernels exact (Triton hết shared memory)"))
+        if decoder == "flashdecoder" and auto_decoder:
+            rest.append(("vae", "exact", "VAE Wan 2.2 + kernels exact"))
+        return [first] + rest
 
     def build(decoder_kind):
         def builder(video_file, model_file, vae_file):
             return build_workflow(video_file, name, scale=scale, color_fix=color_fix, seed=seed, decoder=decoder_kind,
-                                  kernels=kernels, kv_offload=kv_offload, encoder=encoder, vae_file=vae_file)
+                                  kernels=kernels_kind, kv_offload=kv_offload, encoder=encoder, vae_file=vae_file)
         return builder
 
-    def run_once(decoder_kind, note=None):
+    def run_once(decoder_kind, kernels_kind, note=None):
         state = check_ready(base, name, decoder=decoder_kind)
         if not state["ok"]:
             raise ComfyError("ReCaVSR chưa sẵn sàng: "
@@ -281,7 +297,7 @@ def upscale_video(input_path, output_path, *, comfy_dir, base="http://127.0.0.1:
                                f"và {name} + prompt.safetensors + flashdecoder.safetensors trong models/recavsr"
                                + (f" + {VAE_FILE[2]} trong models/vae (decoder='vae')." if decoder_kind == "vae" else "."))
         if progress:
-            progress(2, "preparing", f"ReCaVSR {name} • scale {scale:g} • decoder {decoder_kind} • kernels {kernels}"
+            progress(2, "preparing", f"ReCaVSR {name} • scale {scale:g} • decoder {decoder_kind} • kernels {kernels_kind}"
                                      f" • encoder {encoder}" + (f" • {note}" if note else ""))
         combos = [("ReCaVSRLoader", "transformer", name)]
         nodes = CORE_NODES + RECAVSR_NODES
@@ -298,23 +314,26 @@ def upscale_video(input_path, output_path, *, comfy_dir, base="http://127.0.0.1:
     # LƯU Ý: KHÔNG truyền name qua model_file — client chung sẽ kiểm nó trong combo của UNETLoader
     # (models/diffusion_models của RelayVSR) và báo sai. Weight của ReCaVSR nằm trong combo
     # `ReCaVSRLoader.transformer` (models/recavsr), nên kiểm bằng extra_combos.
-    try:
-        result = run_once(decoder)
-    except ComfyError as exc:
-        # T4 (sm_75) không đủ shared memory cho kernel cửa sổ của FlashDecoder ở scale lớn
-        # ("out of resource: shared memory, Required: 98304, Hardware limit: 65536") → dùng VAE Wan 2.2
-        # (chậm hơn 25–40× phần decode nhưng chạy được và cho nhiều chi tiết hơn).
-        if not (auto_decoder and decoder == "flashdecoder" and "shared memory" in str(exc)
-                and "out of resource" in str(exc)):
-            raise
-        if progress:
-            progress(3, "fallback", "FlashDecoder hết shared memory trên GPU này → chuyển sang VAE Wan 2.2 "
-                                    "(chậm hơn, chi tiết hơn)")
-        ensure_vae(comfy_dir, log=progress and (lambda text: progress(3, "fallback", text)))
-        decoder = "vae"
-        result = run_once(decoder, note="tự chuyển sau lỗi FlashDecoder")
+    ladder = attempts()
+    result = None
+    for index, (decoder_kind, kernels_kind, note) in enumerate(ladder):
+        try:
+            result = run_once(decoder_kind, kernels_kind, note=note)
+            decoder, kernels = decoder_kind, kernels_kind
+            break
+        except ComfyError as exc:
+            shared_oom = "shared memory" in str(exc) and "out of resource" in str(exc)
+            if not shared_oom or index + 1 >= len(ladder):
+                raise                       # lỗi khác, hoặc đã hết cách thử → giữ nguyên lỗi thật
+            nxt = ladder[index + 1]
+            if progress:
+                progress(3, "fallback", f"Triton hết shared memory ở bước này (decoder {decoder_kind}, kernels "
+                                        f"{kernels_kind}) → thử tiếp: decoder {nxt[0]}, kernels {nxt[1]}")
+            if nxt[0] == "vae":
+                ensure_vae(comfy_dir, log=progress and (lambda text: progress(3, "fallback", text)), token=kwargs.get("token"))
     result["model_file"] = name
     result["decoder"] = decoder
+    result["kernels"] = kernels
     result["precision"] = resolve_precision(precision)
     return result
 
