@@ -695,7 +695,21 @@ VRAM tham chiếu của tác giả (int8 + FlashDecoder, fast kernels): **~11,6 
 | Weight | đúng repo/đúng tên file (`PedroMarinhoDev/ReCaVSR-ComfyUI` int8 + `kopper/ReCaVSR` prompt/flashdecoder), **3/3 file có thật trên Hub**, có token, dùng lại bản sẵn có (symlink) |
 | Ứng dụng Windows (27 checks) | chèn tham số vào worker rồi **compile được**; metadata kernel đúng (GPU/internet/script); client Kaggle: push → status (`queued→running→complete`) → output → copy kết quả; HTTP server 1 file (200/401/HEAD/health); parser URL tunnel; `Runner.run()` chạy trọn đường ống với CLI kaggle **giả**; dry-run **không** đẩy kernel và **vẫn dọn** tunnel |
 | Tunnel thật | tải `cloudflared.exe` (53 MB), mở quick tunnel, `/health` OK qua URL công khai và **tải được file qua URL đó** (`payload_ok: true`) |
+| Kaggle thật — đăng nhập | `kaggle.json` (username + key) → `kaggle config view` + `kaggle kernels list -m` trả về kernel thật của tài khoản |
+| Kaggle thật — push→chạy→tải kết quả | kernel CPU `hoanghoannguyen1223/valo-smoke`: push OK, trạng thái `RUNNING → COMPLETE`, tải về `valo_result.json` + file sinh ra trên Kaggle (`hello from kaggle …`) |
+| Kaggle thật — job ReCaVSR int8 (GPU) | xem dòng cuối mục này |
 | Suy luận ReCaVSR | **chưa kiểm chứng** — cần GPU NVIDIA (máy dev không có) |
+
+Ghi chú về token Kaggle (đã thử thật): token kiểu mới `KGAT_…` **không** dùng được với CLI `kaggle` 1.7.4.5
+(API trả 401 khi gọi kiểu Basic auth, 200 khi gửi `Authorization: Bearer <token>`; nhưng CLI bản này chỉ đọc
+`kaggle.json`/`KAGGLE_USERNAME`+`KAGGLE_KEY`). Vì vậy app dùng `kaggle.json` — tải ở Kaggle → *Account → API →
+Create New API Token* — rồi để vào `%USERPROFILE%\.kaggle\kaggle.json`. Nếu sau này Kaggle chỉ cấp token `KGAT_…`,
+đường Bearer có sẵn trong `kagglesdk` (biến môi trường `KAGGLE_API_TOKEN`) và có thể nối thêm vào `winapp`.
+
+Hai chi tiết chỉ lộ ra khi chạy thật trên Kaggle:
+**Kaggle slugify `title` để đặt slug kernel** (title khác slug → kernel bị đổi tên, và `kernels push` in ra ref
+mới) → app đặt `title` suy ra từ slug và luôn dùng **ref do push trả về**; và worker nhận tham số qua literal
+Python chứ không phải JSON (JSON sinh `false/true` → `NameError` khi chạy).
 
 Ngoài ra khi viết code đã bắt được 2 lỗi thật: node pack **không import được nếu thiếu `triton`**
 (`flashdecoder.py` import `tl`) → worker cài triton **bắt buộc**; và HTTP reason phrase tiếng Việt làm
