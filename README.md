@@ -623,6 +623,23 @@ graph LR
 Kaggle **không** cho kết nối vào notebook, nên chiều đưa video đi dùng tunnel tạm (cloudflared, app tự tải ~53 MB,
 không cần tài khoản); chiều lấy kết quả về dùng API chính thức `kaggle kernels output`.
 
+### Chạy bằng 1 cú nhấp
+
+| Cách | File | Ghi chú |
+|---|---|---|
+| Nhấp đúp | **`Chay_App.cmd`** | tự tìm `pythonw` (không hiện cửa sổ đen); dùng ngay, không cần build |
+| Nhấp đúp | `Chay_App.pyw` | nếu Windows đã liên kết `.pyw` với Python |
+| **Một file .exe** | chạy **`build_exe.cmd`** một lần → `dist\ValoUpscale.exe` | nhấp đúp là mở app; máy khác không cần cài Python (vẫn cần `kaggle` CLI + `kaggle.json`) |
+
+`build_exe.cmd` cài `pyinstaller`, nhúng luôn `kaggle_jobs/recavsr_worker.py` vào gói và tạo **một file duy nhất**
+`dist\ValoUpscale.exe` — bản gọn **~9,2 MB**, build ~20 s (đã loại numpy/PIL/torch để exe nhẹ và tránh lỗi đệ quy
+khi đóng gói). Vì vậy 2 nút *Kiểm tra ComfyUI ở máy* và *Chạy local* trong bản exe sẽ báo cần chạy từ mã nguồn;
+muốn có cả 2 nút đó thì chạy `python run_win.py` (máy đã có sẵn numpy/PIL) — toàn bộ đường **GPU Kaggle vẫn đầy đủ trong exe**. Bản exe không có console;
+muốn tự kiểm bản đóng gói thì chạy `dist\ValoUpscale.exe --self-test` — nó ghi `valo_self_test.json` cạnh file exe
+(đường dẫn worker nhúng, phiên bản tkinter, trạng thái `frozen`). Chạy từ mã nguồn thì `python run_win.py --self-test`
+in thẳng ra màn hình. Kết quả thật của `dist\ValoUpscale.exe --self-test`: `frozen: true`, worker nhúng ở
+`…\_MEIxxxx\kaggle_jobs\recavsr_worker.py`, `worker_template_exists: true`.
+
 ### Cài & dùng
 
 ```bash
@@ -648,6 +665,8 @@ python -m winapp.cli --video clip.mp4 --dry-run --json      # xem trước, khô
 | `winapp/kaggle_client.py` | bọc CLI `kaggle`; dựng thư mục kernel + chèn tham số vào worker |
 | `winapp/share.py`, `winapp/tunnel.py` | HTTP server 1 file (có token) + cloudflared quick tunnel |
 | `winapp/cli.py` | chạy không GUI: `--check`, `--tunnel-test`, `--dry-run`, chạy thật |
+| `Chay_App.cmd`, `Chay_App.pyw` | nhấp đúp để mở app |
+| `build_exe.cmd` | build `dist\ValoUpscale.exe` (1 file, nhấp đúp) |
 | `kaggle_jobs/recavsr_worker.py` | script chạy **trên Kaggle**: ComfyUI + node pack + weight + upscale |
 | `valo_upscale/recavsr.py` | module dùng chung: tải weight int8/bf16, dựng workflow, gọi ComfyUI |
 | `recavsr_kaggle.ipynb` | chạy tay trên Kaggle (cùng worker, không cần app) |

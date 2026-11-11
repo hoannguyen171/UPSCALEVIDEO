@@ -6,6 +6,7 @@ Tách khỏi GUI để test được bằng CLI giả, và để dùng lại t�
 from __future__ import annotations
 
 import json
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -15,7 +16,20 @@ from . import kaggle_client as kc
 from .share import FileShareServer
 from .tunnel import ensure_cloudflared, start_quick_tunnel, wait_public
 
-WORKER_TEMPLATE = Path(__file__).resolve().parent.parent / "kaggle_jobs" / "recavsr_worker.py"
+def worker_template_path():
+    """Đường dẫn ``kaggle_jobs/recavsr_worker.py`` — chạy từ mã nguồn hoặc từ file exe đã đóng gói."""
+    candidates = []
+    bundled = getattr(sys, "_MEIPASS", None)          # PyInstaller onefile
+    if bundled:
+        candidates.append(Path(bundled) / "kaggle_jobs" / "recavsr_worker.py")
+    candidates.append(Path(__file__).resolve().parent.parent / "kaggle_jobs" / "recavsr_worker.py")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[-1]
+
+
+WORKER_TEMPLATE = worker_template_path()
 
 
 @dataclass
@@ -96,15 +110,26 @@ class Runner:
         self.log(f"URL video công khai: {public}")
         return public
 
-    def prepare(self, video_url=None):
-        """Tạo URL công khai (hoặc dùng sẵn) + thư mục kernel. Trả dict để in ra/in dry-run."""
+    def prepare(self, video_url=None, allow_placeholder_user=False):
+        """Tạo URL công khai (hoặc dùng sẵn) + thư mục kernel. Trả dict để in ra/in dry-run.
+
+        ``allow_placeholder_user``: bản xem trước vẫn dựng được kế hoạch khi chưa có ``kaggle.json``
+        (chỉ để xem luồng; chạy thật bắt buộc phải có credentials).
+        """
         opts = self.options
         video_url = video_url or self.prepare_tunnel()
         job = opts.worker_job(video_url)
 
         self._set("kernel")
         template = self.template_path.read_text(encoding="utf-8")
-        kernel_ref = f"{self.kaggle.username()}/{opts.kernel_slug}"
+        try:
+            username = self.kaggle.username()
+        except kc.KaggleError:
+            if not allow_placeholder_user:
+                raise
+            username = "TEN-KAGGLE-CUA-BAN"
+            self.log("Chưa có kaggle.json → bản xem trước dùng tên tạm; chạy thật cần credentials Kaggle.")
+        kernel_ref = f"{username}/{opts.kernel_slug}"
         self.kernel_dir = kc.build_kernel_dir(self._work_dir() / "kernel", template, job, kernel_ref,
                                               metadata=kc.kernel_metadata(kernel_ref, is_private=opts.kernel_private))
         self.log(f"Thư mục kernel: {self.kernel_dir} (ref {kernel_ref})")
@@ -117,7 +142,7 @@ class Runner:
         Vẫn phải dọn share/tunnel sau khi xem trước, nếu không sẽ bỏ lại 1 tunnel đang mở.
         """
         try:
-            plan = self.prepare()
+            plan = self.prepare(allow_placeholder_user=True)
             plan["dry_run"] = True
             return plan
         finally:

@@ -17,6 +17,8 @@ venv/
 *.egg-info/
 dist/
 build/
+*.spec
+valo_self_test.json
 
 # IDE / OS
 .vscode/

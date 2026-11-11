@@ -198,7 +198,12 @@ class App(Tk):
             import sys  # noqa: PLC0415
 
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-            from valo_upscale import comfy_upscale, recavsr  # noqa: PLC0415
+            try:
+                from valo_upscale import recavsr  # noqa: PLC0415
+            except ImportError:
+                self.log("Bản .exe gọn không kèm tính năng kiểm ComfyUI ở máy (thiếu numpy/PIL).")
+                self.log("Muốn dùng: chạy từ mã nguồn → python run_win.py (hoặc pip install numpy pillow).")
+                return
 
             base = self.comfy_var.get().strip() or "http://127.0.0.1:8188"
             try:
@@ -241,8 +246,13 @@ class App(Tk):
             import sys  # noqa: PLC0415
 
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-            from valo_upscale import recavsr  # noqa: PLC0415
-
+            try:
+                from valo_upscale import recavsr  # noqa: PLC0415
+            except ImportError:
+                self.queue.put(("error", "Bản .exe gọn không kèm chế độ chạy local (thiếu numpy/PIL).\n"
+                                         "Hãy dùng nút BẮT ĐẦU (GPU Kaggle), hoặc chạy từ mã nguồn:\n"
+                                         "  python run_win.py"))
+                return
             try:
                 out = Path(options.out_dir) / (options.output_name or
                                                f"{options.video.stem}_recavsr_x{options.scale:g}.mp4")
