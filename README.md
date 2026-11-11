@@ -209,6 +209,18 @@ Real-ESRGAN/BasicSR: BSD-3-Clause; weight mô hình tải từ GitHub Releases c
 Đây là bản **tự viết lại** dựa trên phân tích tĩnh `app.asar` của *Valo Upscale*; repo không chứa
 file nhị phân, `config.json` máy chủ, hay bất kỳ thành phần khoá bản quyền nào của bản gốc.
 
+Phần chạy trên GPU (Kaggle) dùng thêm các thành phần bên thứ ba — repo **không** chứa chúng, worker tự tải lúc chạy:
+
+| Thành phần | Giấy phép |
+|---|---|
+| ComfyUI | GPL-3.0 |
+| [ComfyUI-ReCaVSR](https://github.com/PedroMarinhoDev/ComfyUI-ReCaVSR) | **GPL-3.0** (do nó dùng lại mã của ComfyUI) |
+| Mã ReCaVSR (ĐH KH&CN Trung Quốc) nằm trong node pack: kernel Triton attention, FlashDecoder, cache KV, DiT/session | Apache-2.0 (`LICENSE-APACHE` của node pack) |
+| Weight `PedroMarinhoDev/ReCaVSR-ComfyUI` (int8), `kopper/ReCaVSR` (prompt/flashdecoder/bf16), `Comfy-Org/Wan_2.2_ComfyUI_Repackaged` (VAE) | theo điều kiện của tác giả từng repo |
+
+⚠️ Nếu bạn **phát hành một gói có kèm** ComfyUI/node pack (ví dụ đóng gói chung vào app), nghĩa vụ của
+**GPL-3.0** áp dụng cho phần đó — còn repo này (MIT) chỉ gọi chúng qua mạng.
+
 ---
 
 ## 9. Luồng "link thư mục công khai" (UI trên Kaggle/Colab)
