@@ -240,7 +240,7 @@ def main(argv=None):
                 "elapsed": round(result["elapsed"], 1),
                 "precision": args.precision,
                 "scale": args.scale,
-                "kernels": args.kernels,
+                "kernels": result.get("kernels", args.kernels),   # kernels THỰC DÙNG (thang thử có thể đổi)
                 "decoder": result.get("decoder", args.decoder),
             }
             log("KẾT QUẢ:", json.dumps(summary, ensure_ascii=False))
