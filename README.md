@@ -696,9 +696,26 @@ Thời gian thật của một job 2× thành công trên T4 (đọc từ `valo_
 | **Suy luận 24 frame 320×180 → 640×360** | **36,8 s** (≈1,5 s/frame) |
 | Dọn dẹp + ghi kết quả | 2 s |
 
-⇒ **Chi phí cố định ~2 phút/job** không phụ thuộc độ dài video, cộng ~1,5 s mỗi frame ở 2× với clip nhỏ.
-Số frame tăng theo độ phân giải đầu ra (mức 4× = 4× diện tích pixel → chậm hơn nhiều lần) [ước lượng, chưa đo
-ở 4×]. Vì vậy: chạy 1 clip dài rẻ hơn hẳn nhiều clip ngắn.
+⇒ **Chi phí cố định ~2 phút/job** không phụ thuộc độ dài video.
+
+Từ 2 điểm đo thật ở trên suy ra chi phí suy luận theo pixel (T4, int8):
+
+| kernels | giây mỗi megapixel mỗi frame |
+|---|---|
+| `fast` (2× chạy được) | **160 s/MP/frame** (1,53 s cho frame 640×360) |
+| `exact` (4× buộc phải dùng) | **288 s/MP/frame** — chậm hơn `fast` **1,80×** |
+
+Ước lượng cho một video 10 giây 30 fps (300 frame) [ngoại suy từ 2 số đo, chưa đo trực tiếp — video dài còn có lợi
+vì model chạy theo khối 21 frame nên phần khởi động được chia đều hơn]:
+
+| Video vào | Ra 2× | Thời gian | Ra 4× | Thời gian |
+|---|---|---|---|---|
+| 640×360 | 1280×720 | ≈31 phút | 2560×1440 | ≈3,7 giờ |
+| 1280×720 | 2560×1440 | ≈2 giờ | 3840×2160 | ≈8,3 giờ |
+| 1920×1080 | 3840×2160 (bị chặn 4K) | ≈4,6 giờ | 3840×2160 | ≈8,3 giờ |
+
+⇒ Video dài nên **cắt thành phần** cần upscale, dùng **2×** (nhanh hơn 1,8× mỗi pixel và vừa VRAM hơn), và nhớ
+Kaggle giới hạn **12 giờ/kernel** + hạn mức GPU theo tuần. Chạy 1 clip dài rẻ hơn hẳn nhiều clip ngắn.
 Nhật ký chạy ngay trong cửa sổ; xong có nút mở video/thư mục kết quả. Hoặc dùng dòng lệnh:
 
 ```bash
