@@ -200,8 +200,12 @@ class App(Tk):
         Windows *Copy as path* bọc trong dấu ngoặc kép, và người dùng hay dán kèm ``&`` của PowerShell —
         để nguyên thì ``Path(...).is_file()`` sai và app báo "Thiếu video" dù file có thật.
         """
-        value = (text or "").strip().strip('"').strip("'").strip()
-        value = value.lstrip("&").strip()
+        value = (text or "").strip()
+        while True:                       # dán kiểu `& "J:\phim.mp4"` cần bỏ CẢ ngoặc kép lẫn &
+            stripped = value.strip().lstrip("&").strip().strip('"').strip("'").strip()
+            if stripped == value:
+                break
+            value = stripped
         return str(Path(value).expanduser()) if value else ""
 
     def _run_options(self):
