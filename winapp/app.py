@@ -23,6 +23,9 @@ COLOR_FIXES = ("none", "adain", "wavelet")
 KERNELS = ("fast", "exact")
 DECODERS = ("auto", "flashdecoder", "vae")
 ENCODERS = ("auto", "hevc nvenc", "h264 nvenc", "h264")
+# Dạng ĐÚNG cho Tk trên Windows: mỗi nhãn đi với một LIST mẫu, không phải một chuỗi cách nhau dấu cách
+VIDEO_FILETYPES = [("Video", ("*.mp4", "*.mkv", "*.mov", "*.avi", "*.webm", "*.m4v", "*.mpg", "*.mpeg", "*.wmv")),
+                   ("Tất cả", "*.*")]
 
 
 class App(Tk):
@@ -152,23 +155,59 @@ class App(Tk):
             self.progress.stop()
 
     def _pick_video(self):
-        path = filedialog.askopenfilename(
-            title="Chọn video cần upscale",
-            filetypes=[("Video", "*.mp4 *.mkv *.mov *.avi *.webm *.m4v"), ("Tất cả", "*.*")])
+        """Mở hộp thoại chọn video.
+
+        Hai lỗi thật đã gặp trên Windows: (1) ``filetypes`` phải là *danh sách* mẫu (``("*.mp4", "*.mkv"…)``),
+        không phải một chuỗi cách nhau bằng dấu cách — chuỗi đó làm hộp thoại **không liệt kê file nào**;
+        (2) thiếu ``parent`` thì hộp thoại có thể mở **sau** cửa sổ chính nên tưởng như bấm không ăn.
+        """
+        try:
+            self.lift()
+            self.focus_force()
+            path = filedialog.askopenfilename(
+                parent=self,
+                title="Chọn video cần upscale",
+                initialdir=str(Path(self.video_var.get().strip()).parent if self.video_var.get().strip() else Path.cwd()),
+                filetypes=VIDEO_FILETYPES)
+        except Exception as exc:                      # noqa: BLE001 - phải HIỆN lỗi ra, bản exe không có console
+            self.log(f"LỖI mở hộp thoại chọn video: {type(exc).__name__}: {exc}")
+            messagebox.showerror("Không mở được hộp thoại",
+                                 f"{type(exc).__name__}: {exc}\n\nBạn vẫn có thể dán đường dẫn video vào ô bên trên.",
+                                 parent=self)
+            return
         if path:
             self.video_var.set(path)
-            if self.out_var.get().startswith(str(Path.cwd())):
+            if not self.out_var.get().strip():
                 self.out_var.set(str(Path(path).parent / "ket_qua"))
 
     def _pick_outdir(self):
-        path = filedialog.askdirectory(title="Chọn thư mục lưu kết quả")
+        try:
+            self.lift()
+            self.focus_force()
+            path = filedialog.askdirectory(parent=self, title="Chọn thư mục lưu kết quả",
+                                           initialdir=self.out_var.get().strip() or str(Path.cwd()))
+        except Exception as exc:                      # noqa: BLE001
+            self.log(f"LỖI mở hộp thoại chọn thư mục: {type(exc).__name__}: {exc}")
+            messagebox.showerror("Không mở được hộp thoại", f"{type(exc).__name__}: {exc}", parent=self)
+            return
         if path:
             self.out_var.set(path)
 
+    @staticmethod
+    def _clean_path(text):
+        """Chuẩn hoá đường dẫn người dùng gõ/dán.
+
+        Windows *Copy as path* bọc trong dấu ngoặc kép, và người dùng hay dán kèm ``&`` của PowerShell —
+        để nguyên thì ``Path(...).is_file()`` sai và app báo "Thiếu video" dù file có thật.
+        """
+        value = (text or "").strip().strip('"').strip("'").strip()
+        value = value.lstrip("&").strip()
+        return str(Path(value).expanduser()) if value else ""
+
     def _options(self):
-        video = Path(self.video_var.get().strip())
+        video = Path(self._clean_path(self.video_var.get()) or ".")
         if not video.is_file():
-            messagebox.showerror("Thiếu video", "Hãy chọn file video trước.")
+            messagebox.showerror("Thiếu video", "Hãy chọn file video trước (hoặc dán đường dẫn vào ô).")
             return None
         try:
             scale = float(self.scale_var.get())
@@ -176,7 +215,7 @@ class App(Tk):
         except ValueError:
             messagebox.showerror("Tham số sai", "Scale và Seed phải là số.")
             return None
-        return RunOptions(video=video, out_dir=Path(self.out_var.get().strip() or "ket_qua"), scale=scale,
+        return RunOptions(video=video, out_dir=Path(self._clean_path(self.out_var.get()) or "ket_qua"), scale=scale,
                           precision=self.precision_var.get(), color_fix=self.color_var.get(),
                           kernels=self.kernels_var.get(), decoder=self.decoder_var.get(),
                           encoder=self.encoder_var.get(), seed=seed,

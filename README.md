@@ -787,14 +787,22 @@ Nếu bạn chỉ định rõ `--decoder flashdecoder` thì thang chỉ có bư�
 
 Chỉ định tay: `--kernels fast | exact` và `--decoder flashdecoder | vae | auto`.
 
-### Đã kiểm chứng (máy dev, 62 checks)
+### Đã kiểm chứng (máy dev, 70+ checks)
+
+⚠️ **Lỗi người dùng báo: bấm "Chọn video…" không chọn được.** Nguyên nhân (đã sửa, có test chặn tái diễn):
+`filetypes=[("Video", "*.mp4 *.mkv …")]` là **sai định dạng Tk** — Tk nhận đúng một mẫu `'*.mp4 *.mkv …'` chứa
+dấu cách, nên hộp thoại Windows **không liệt kê file nào**; kiểm chứng bằng cách in `filedialog.Open(...)._fixoptions()`.
+Ngoài ra hộp thoại thiếu `parent=` nên có thể mở **sau** cửa sổ chính. Đã sửa: danh sách mẫu đúng chuẩn, `parent` +
+`lift()`/`focus_force()`, lỗi hộp thoại được **ghi ra nhật ký + hiện hộp thoại báo** (bản exe không có console nên
+trước đây chết câm), và ô đường dẫn nhận cả đường dẫn dán kiểu *Copy as path* (`"…"`) hay kèm `&` của PowerShell.
+Đã loại trừ giả thuyết thiếu module: `--self-test` trong bản đóng gói báo `tk_filedialog: true`, `tk_messagebox: true`.
 
 | Hạng mục | Kết quả |
 |---|---|
 | Node pack thật trong ComfyUI 0.44 | ComfyUI nạp được `ReCaVSRLoader` + `ReCaVSRUpscale`, input khớp graph; workflow dựng bằng code **trùng file API chính thức** và **VALID** (lỗi chỉ ở khâu nạp weight giả) |
 | Đọc combo của schema V3 | sửa `_combo_options` để đọc `["COMBO", {"options": […]}]` — nếu không, worker sẽ báo thiếu weight dù có đủ |
 | Weight | đúng repo/đúng tên file (`PedroMarinhoDev/ReCaVSR-ComfyUI` int8 + `kopper/ReCaVSR` prompt/flashdecoder), **3/3 file có thật trên Hub**, có token, dùng lại bản sẵn có (symlink) |
-| Ứng dụng Windows (30 checks: thêm Decoder GUI, tự hồi phục tunnel 7b, ước lượng VRAM trong dry-run) | chèn tham số vào worker rồi **compile được**; metadata kernel đúng (GPU/internet/script); client Kaggle: push → status (`queued→running→complete`) → output → copy kết quả; HTTP server 1 file (200/401/HEAD/health); parser URL tunnel; `Runner.run()` chạy trọn đường ống với CLI kaggle **giả**; dry-run **không** đẩy kernel và **vẫn dọn** tunnel |
+| Ứng dụng Windows (36 checks: Decoder GUI, tự hồi phục tunnel, ước lượng VRAM trong dry-run, hộp thoại chọn video + dán đường dẫn) | chèn tham số vào worker rồi **compile được**; metadata kernel đúng (GPU/internet/script); client Kaggle: push → status (`queued→running→complete`) → output → copy kết quả; HTTP server 1 file (200/401/HEAD/health); parser URL tunnel; `Runner.run()` chạy trọn đường ống với CLI kaggle **giả**; dry-run **không** đẩy kernel và **vẫn dọn** tunnel |
 | Tunnel thật | tải `cloudflared.exe` (53 MB), mở quick tunnel, `/health` OK qua URL công khai và **tải được file qua URL đó** (`payload_ok: true`) |
 | Tốc độ đường truyền video | đo thật với file 50 MB qua URL công khai của tunnel: **12,1 MB/s** (4,1 s) → video 200 MB ≈ **20 s**; video lớn không phải là điểm nghẽn |
 | Kaggle thật — đăng nhập | `kaggle.json` (username + key) → `kaggle config view` + `kaggle kernels list -m` trả về kernel thật của tài khoản |

@@ -12,6 +12,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from winapp.app import main  # noqa: E402
 
 
+def _importable(name):
+    """Có import được module này trong bản đang chạy không (kể cả bản đóng gói)."""
+    import importlib
+
+    try:
+        importlib.import_module(name)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def self_test():
     import json
     import tkinter
@@ -35,6 +46,10 @@ def self_test():
         "worker_template_exists": jobmod.worker_template_path().is_file(),
         "cloudflared_asset": platform_asset()[0],
         "kagglesdk": sdk,                       # dùng để chỉ tải file log/kết quả thay vì cả output
+        # Hộp thoại chọn file: thiếu 2 module này trong bản đóng gói thì nút "Chọn video…" chết CÂM
+        # (không có console nên không thấy lỗi) — đúng lỗi người dùng đã báo.
+        "tk_filedialog": _importable("tkinter.filedialog"),
+        "tk_messagebox": _importable("tkinter.messagebox"),
         "kaggle_cli": shutil.which("kaggle"),   # cần cho push/status/output
         "cwd": str(Path.cwd()),
     }
