@@ -204,7 +204,13 @@ class App(Tk):
         value = value.lstrip("&").strip()
         return str(Path(value).expanduser()) if value else ""
 
-    def _options(self):
+    def _run_options(self):
+        """Đọc tham số từ GUI thành ``RunOptions``.
+
+        ⚠️ TÊN HÀM: **không** được đặt là ``_options``. ``tkinter.commondialog.Dialog.show()`` gọi
+        ``master._options(options)`` để định dạng tham số cho Tcl, nên nếu lớp này có ``_options`` thì nó
+        **che mất hàm của Tkinter** và hộp thoại chết với ``TypeError: takes 1 positional argument but 2 were given``.
+        """
         video = Path(self._clean_path(self.video_var.get()) or ".")
         if not video.is_file():
             messagebox.showerror("Thiếu video", "Hãy chọn file video trước (hoặc dán đường dẫn vào ô).")
@@ -274,7 +280,7 @@ class App(Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _start(self, dry_run):
-        options = self._options()
+        options = self._run_options()
         if not options:
             return
         self._set_running(True)
@@ -295,7 +301,7 @@ class App(Tk):
 
     def _start_local(self):
         """Chạy trên ComfyUI ở máy (nếu đã cài node ReCaVSR + weight) — để thử nhanh/không cần Kaggle."""
-        options = self._options()
+        options = self._run_options()
         if not options:
             return
         self._set_running(True)
